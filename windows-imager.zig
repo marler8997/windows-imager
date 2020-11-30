@@ -100,9 +100,9 @@ fn printUtf16Le(s: []const u16) void {
 }
 fn printDiskSeparator(name: []const u16) void {
     std.debug.warn("--------------------------------------------------------------------------------\n", .{});
-    std.debug.warn("Drive '", .{});
+    std.debug.warn("Drive \"", .{});
     printUtf16Le(name);
-    std.debug.warn("'\n", .{});
+    std.debug.warn("\"\n", .{});
 }
 fn dumpDiskGeo(geo: DISK_GEOMETRY) !void {
     const diskSize = sumDiskSize(geo);
@@ -272,7 +272,12 @@ pub fn main2() anyerror!u8 {
         //mem.copy(u8, file, fileSlice);
         const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
-        const driveHandle = try openDrive(drive, win.GENERIC_READ | win.GENERIC_WRITE);
+        const driveHandle = openDrive(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
+            std.debug.warn("Error: Failed to open drive '", .{});
+            printUtf16Le(drive);
+            std.debug.warn("': {}\n", .{e});
+            return error.AlreadyReported;
+        };
         const diskGeo = try getDiskGeo(driveHandle);
         printDiskSeparator(drive);
         try dumpDiskGeo(diskGeo);
@@ -340,7 +345,7 @@ fn imageDisk(allocator: *mem.Allocator,
     while (totalProcessed < fileSize) {
         const size = try win.ReadFile(fileHandle, buf, null, .blocking);
         std.debug.assert(size > 0);
-        std.debug.warn("[DEBUG] read {} bytes\n", .{size});
+        //std.debug.warn("[DEBUG] read {} bytes\n", .{size});
 
         //try win.SetFilePointerEx_BEGIN(driveHandle, totalProcessed);
 
@@ -350,15 +355,15 @@ fn imageDisk(allocator: *mem.Allocator,
         {
             var written : u32 = undefined;
             if (0 == kernel32.WriteFile(driveHandle, buf.ptr, @intCast(u32, size), &written, null)) {
-                std.debug.warn("Error: WriteFile to drive (size={}) failed, error={}\n",.{
-                    size, kernel32.GetLastError()});
+                std.debug.warn("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
+                    size, totalProcessed, kernel32.GetLastError()});
                 return error.AlreadyReported;
             }
             std.debug.assert(written == size);
         }
 
         totalProcessed += size;
-        std.debug.warn("[DEBUG] write {} bytes (total={})\n", .{size, totalProcessed});
+        //std.debug.warn("[DEBUG] write {} bytes (total={})\n", .{size, totalProcessed});
         const now = GetTickCount();
         // TODO: allow rollover
         if ((now - lastReportTicks) > reportFrequency) {
