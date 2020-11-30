@@ -5,7 +5,7 @@ const win = os.windows;
 const kernel32 = win.kernel32;
 
 pub extern "kernel32" fn GetTickCount(
-) callconv(.Stdcall) u32;
+) callconv(win.WINAPI) u32;
 
 // My best guess is that windows expects all enums inside structs to be 32 bits?
 const MEDIA_TYPE = extern enum {
@@ -223,7 +223,7 @@ fn promptYesNo(allocator: *mem.Allocator, prompt: []const u8) !bool {
             error.StreamTooLong => continue,
             else => return e
         };
-        const s = std.mem.trimRight(u8, answer.span(), "\r");
+        const s = std.mem.trimRight(u8, answer.items, "\r");
         if (std.mem.eql(u8, s, "y")) return true;
         if (std.mem.eql(u8, s, "n")) return false;
     }
