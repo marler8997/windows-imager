@@ -367,8 +367,8 @@ fn imageDisk(allocator: *mem.Allocator,
         const now = GetTickCount();
         // TODO: allow rollover
         if ((now - lastReportTicks) > reportFrequency) {
-            const progress = @intToFloat(f32, totalProcessed) / @intToFloat(f32, fileSize);
-            std.debug.warn("{d:.2}% ({} bytes)\n", .{progress, totalProcessed});
+            const progress = @intToFloat(f32, totalProcessed) / @intToFloat(f32, fileSize) * 100;
+            std.debug.warn("{d:.0}% ({} bytes)\n", .{progress, totalProcessed});
             lastReportTicks = now;
         }
     }
