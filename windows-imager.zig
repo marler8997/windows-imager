@@ -40,43 +40,43 @@ const FSCTL_DISMOUNT_VOLUME         : u32 = 0x00090020;
 const IOCTL_DISK_GET_DRIVE_GEOMETRY : u32 = 0x00070000;
 
 const DISK_GEOMETRY = extern struct {
-    cylinders: win.LARGE_INTEGER,
-    mediaType: MEDIA_TYPE,
-    tracksPerCylinder: u32,
-    sectorsPerTrack: u32,
-    bytesPerSector: u32,
+    Cylinders: win.LARGE_INTEGER,
+    MediaType: MEDIA_TYPE,
+    TracksPerCylinder: u32,
+    SectorsPerTrack: u32,
+    BytesPerSector: u32,
 };
 
 const PhysicalDriveString = struct {
     const PREFIX = "\\\\.\\PHYSICALDRIVE";
     str: [PREFIX.len + 1 :0]u16,
-    pub fn init(driveIndex: u8) PhysicalDriveString {
-        var asciiBuf : [PREFIX.len + 1 :0]u8 = undefined;
+    pub fn init(drive_index: u8) PhysicalDriveString {
+        var ascii_buf : [PREFIX.len + 1 :0]u8 = undefined;
         {
-            const slice = std.fmt.bufPrint(&asciiBuf, PREFIX ++ "{}", .{driveIndex}) catch unreachable;
-            std.debug.assert(slice.len == asciiBuf.len);
+            const slice = std.fmt.bufPrint(&ascii_buf, PREFIX ++ "{}", .{drive_index}) catch unreachable;
+            std.debug.assert(slice.len == ascii_buf.len);
         }
-        asciiBuf[asciiBuf.len] = 0;
+        ascii_buf[ascii_buf.len] = 0;
         var result : PhysicalDriveString = undefined;
         {
-            const convertResult = std.unicode.utf8ToUtf16Le(&result.str, &asciiBuf) catch unreachable;
-            std.debug.assert(convertResult == asciiBuf.len);
+            const convert_result = std.unicode.utf8ToUtf16Le(&result.str, &ascii_buf) catch unreachable;
+            std.debug.assert(convert_result == ascii_buf.len);
         }
-        result.str[asciiBuf.len] = 0;
+        result.str[ascii_buf.len] = 0;
         return result;
     }
 };
 
-fn getDiskGeo(driveHandle: win.HANDLE) !DISK_GEOMETRY {
-    var diskGeo : DISK_GEOMETRY = undefined;
+fn getDiskGeo(drive_handle: win.HANDLE) !DISK_GEOMETRY {
+    var disk_geo : DISK_GEOMETRY = undefined;
     {
-        var bytesReturned : u32 = undefined;
+        var bytes_returned : u32 = undefined;
         const result = kernel32.DeviceIoControl(
-            driveHandle,
+            drive_handle,
             IOCTL_DISK_GET_DRIVE_GEOMETRY,
             null, 0,
-            &diskGeo, @sizeOf(@TypeOf(diskGeo)),
-            &bytesReturned,
+            &disk_geo, @sizeOf(@TypeOf(disk_geo)),
+            &bytes_returned,
             null);
         if (result == 0) {
             std.debug.warn("Error: DeviceIoControl IOCTL_DISK_GET_DRIVE_GEOMETRY failed with {}\n", .{
@@ -84,14 +84,14 @@ fn getDiskGeo(driveHandle: win.HANDLE) !DISK_GEOMETRY {
             return error.AlreadyReported;
         }
     }
-    return diskGeo;
+    return disk_geo;
 }
 fn sumDiskSize(geo: DISK_GEOMETRY) u64 {
     return
-        @intCast(u64, geo.cylinders) *
-        @intCast(u64, geo.tracksPerCylinder) *
-        @intCast(u64, geo.sectorsPerTrack) *
-        @intCast(u64, geo.bytesPerSector);
+        @intCast(u64, geo.Cylinders) *
+        @intCast(u64, geo.TracksPerCylinder) *
+        @intCast(u64, geo.SectorsPerTrack) *
+        @intCast(u64, geo.BytesPerSector);
 }
 fn printUtf16Le(s: []const u16) void {
     for (s) |c| {
@@ -105,10 +105,10 @@ fn printDiskSeparator(name: []const u16) void {
     std.debug.warn("\"\n", .{});
 }
 fn dumpDiskGeo(geo: DISK_GEOMETRY) !void {
-    const diskSize = sumDiskSize(geo);
-    var typedDiskSize : f32 = @intToFloat(f32, diskSize);
+    const disk_size = sumDiskSize(geo);
+    var typed_disk_size : f32 = @intToFloat(f32, disk_size);
     var suffix : []const u8 = undefined;
-    getNiceSize(&typedDiskSize, &suffix);
+    getNiceSize(&typed_disk_size, &suffix);
     std.debug.warn(
         \\{}
         \\{} cylinders *
@@ -118,9 +118,9 @@ fn dumpDiskGeo(geo: DISK_GEOMETRY) !void {
         \\= {} bytes
         \\= {d:.1} {}
         \\
-    , .{geo.mediaType, geo.cylinders, geo.tracksPerCylinder,
-        geo.sectorsPerTrack, geo.bytesPerSector, diskSize,
-        typedDiskSize, suffix});
+    , .{geo.MediaType, geo.Cylinders, geo.TracksPerCylinder,
+        geo.SectorsPerTrack, geo.BytesPerSector, disk_size,
+        typed_disk_size, suffix});
 }
 
 fn getNiceSize(size: *f32, suffix: *[]const u8) void {
@@ -147,10 +147,10 @@ fn getNiceSize(size: *f32, suffix: *[]const u8) void {
     suffix.* = "TB";
     return;
 }
-fn dismountDisk(driveHandle: win.HANDLE) !void {
+fn dismountDisk(disk_handle: win.HANDLE) !void {
     var unused : u32 = undefined;
     const result = kernel32.DeviceIoControl(
-        driveHandle,
+        disk_handle,
         FSCTL_DISMOUNT_VOLUME,
         null, 0,
         null, 0,
@@ -162,10 +162,10 @@ fn dismountDisk(driveHandle: win.HANDLE) !void {
         return error.AlreadyReported;
     }
 }
-fn lockDisk(driveHandle: win.HANDLE) !void {
+fn lockDisk(disk_handle: win.HANDLE) !void {
     var unused : u32 = undefined;
     const result = kernel32.DeviceIoControl(
-        driveHandle,
+        disk_handle,
         FSCTL_LOCK_VOLUME,
         null, 0,
         null, 0,
@@ -178,9 +178,9 @@ fn lockDisk(driveHandle: win.HANDLE) !void {
     }
 }
 
-fn openDrive(driveName: [:0]const u16, access: u32) !win.HANDLE {
-    const driveHandle = kernel32.CreateFileW(
-        driveName,
+fn openDisk(disk_name: [:0]const u16, access: u32) !win.HANDLE {
+    const disk_handle = kernel32.CreateFileW(
+        disk_name,
         access,
         win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
         null,
@@ -189,7 +189,7 @@ fn openDrive(driveName: [:0]const u16, access: u32) !win.HANDLE {
         win.FILE_FLAG_NO_BUFFERING | win.FILE_FLAG_RANDOM_ACCESS,
         null
     );
-    if (driveHandle == win.INVALID_HANDLE_VALUE) {
+    if (disk_handle == win.INVALID_HANDLE_VALUE) {
         switch (kernel32.GetLastError()) {
             .SHARING_VIOLATION => return error.SharingViolation,
             .ALREADY_EXISTS => return error.PathAlreadyExists,
@@ -202,7 +202,7 @@ fn openDrive(driveName: [:0]const u16, access: u32) !win.HANDLE {
             else => |err| return win.unexpectedError(err),
         }
     }
-    return driveHandle;
+    return disk_handle;
 }
 
 fn enforceArgCount(args: []const[]const u8, count: usize) !void {
@@ -219,7 +219,7 @@ fn promptYesNo(allocator: *mem.Allocator, prompt: []const u8) !bool {
         std.debug.warn("{}[y/n]? ", .{prompt});
         //const answer = try std.io.readLine(&buffer);
         answer.resize(0) catch @panic("codebug");
-        std.io.getStdIn().inStream().readUntilDelimiterArrayList(&answer, '\n', 20) catch |e| switch (e) {
+        std.io.getStdIn().reader().readUntilDelimiterArrayList(&answer, '\n', 20) catch |e| switch (e) {
             error.StreamTooLong => continue,
             else => return e
         };
@@ -252,14 +252,14 @@ pub fn main2() anyerror!u8 {
     if (mem.eql(u8, cmd, "list")) {
         try enforceArgCount(args, 0);
         {var i: u8 = 0; while (true) : (i += 1) {
-            const driveName = PhysicalDriveString.init(i);
-            const driveHandle = openDrive(&driveName.str, 0) catch |e| switch (e) {
+            const disk_name = PhysicalDriveString.init(i);
+            const disk_handle = openDisk(&disk_name.str, 0) catch |e| switch (e) {
                 error.FileNotFound => break,
                 else => return e,
             };
-            const diskGeo = try getDiskGeo(driveHandle);
-            printDiskSeparator(&driveName.str);
-            try dumpDiskGeo(diskGeo);
+            const disk_geo = try getDiskGeo(disk_handle);
+            printDiskSeparator(&disk_name.str);
+            try dumpDiskGeo(disk_geo);
         }}
         return 0;
     }
@@ -272,17 +272,17 @@ pub fn main2() anyerror!u8 {
         //mem.copy(u8, file, fileSlice);
         const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
-        const driveHandle = openDrive(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
+        const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
             std.debug.warn("Error: Failed to open drive '", .{});
             printUtf16Le(drive);
             std.debug.warn("': {}\n", .{e});
             return error.AlreadyReported;
         };
-        const diskGeo = try getDiskGeo(driveHandle);
+        const disk_geo = try getDiskGeo(disk_handle);
         printDiskSeparator(drive);
-        try dumpDiskGeo(diskGeo);
+        try dumpDiskGeo(disk_geo);
 
-        const fileHandle = kernel32.CreateFileW(
+        const file_handle = kernel32.CreateFileW(
             file,
             win.GENERIC_READ,
             win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
@@ -291,20 +291,20 @@ pub fn main2() anyerror!u8 {
             win.FILE_ATTRIBUTE_NORMAL,
             null
         );
-        if (fileHandle == win.INVALID_HANDLE_VALUE) {
+        if (file_handle == win.INVALID_HANDLE_VALUE) {
            std.debug.warn("Error: failed to open '{}', error={}\n", .{file, kernel32.GetLastError()});
            return error.AlreadyReported;
         }
-        const diskSize = sumDiskSize(diskGeo);
-        const fileSize = try win.GetFileSizeEx(fileHandle);
+        const disk_size = sumDiskSize(disk_geo);
+        const file_size = try win.GetFileSizeEx(file_handle);
         {
-            var typedFileSize : f32 = @intToFloat(f32, fileSize);
+            var typedFileSize : f32 = @intToFloat(f32, file_size);
             var suffix : []const u8 = undefined;
             getNiceSize(&typedFileSize, &suffix);
-            std.debug.warn("file size is {} ({d:.2} {})\n", .{fileSize, typedFileSize, suffix});
+            std.debug.warn("file size is {} ({d:.2} {})\n", .{file_size, typedFileSize, suffix});
         }
 
-        if (fileSize > diskSize) {
+        if (file_size > disk_size) {
             std.debug.warn("Error: file is too big\n", .{});
             return error.AlreadyReported;
         }
@@ -312,13 +312,13 @@ pub fn main2() anyerror!u8 {
             return 1;
         }
         // TODO: what is a good transfer size? Do some perf testing
-        //const transfer_size = diskGeo.bytesPerSector;
+        //const transfer_size = disk_geo.BytesPerSector;
         const transfer_size = 1024 * 1024;
         {
             // TODO: should this allocation be aligned?  Do some perf testing to see if it helps
             const buf = try allocator.alloc(u8, transfer_size);
             defer allocator.free(buf);
-            try imageDisk(driveHandle, fileHandle, fileSize, buf);
+            try imageDisk(disk_handle, file_handle, file_size, buf);
         }
         std.debug.warn("Successfully imaged drive\n", .{});
         return 0;
@@ -328,48 +328,48 @@ pub fn main2() anyerror!u8 {
     return 1;
 }
 
-fn imageDisk(driveHandle: win.HANDLE, fileHandle: win.HANDLE, fileSize: u64, buf: []u8) !void {
+fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8) !void {
     std.debug.warn("dismounting disk...\n", .{});
-    try dismountDisk(driveHandle);
+    try dismountDisk(disk_handle);
     std.debug.warn("locking disk...\n", .{});
-    try lockDisk(driveHandle);
+    try lockDisk(disk_handle);
     std.debug.warn("disk ready to write\n", .{});
 
     // do I need to do this?
-    //try win.SetFilePointerEx_BEGIN(driveHandle, 0);
+    //try win.SetFilePointerEx_BEGIN(disk_handle, 0);
 
-    var totalProcessed : u64 = 0;
-    var lastReportTicks = GetTickCount();
-    const reportFrequency = 1000; // report every 1000 ms
+    var total_processed : u64 = 0;
+    var last_report_ticks = GetTickCount();
+    const report_frequency = 1000; // report every 1000 ms
 
-    while (totalProcessed < fileSize) {
-        const size = try win.ReadFile(fileHandle, buf, null, .blocking);
+    while (total_processed < file_size) {
+        const size = try win.ReadFile(file_handle, buf, null, .blocking);
         std.debug.assert(size > 0);
         //std.debug.warn("[DEBUG] read {} bytes\n", .{size});
 
-        //try win.SetFilePointerEx_BEGIN(driveHandle, totalProcessed);
+        //try win.SetFilePointerEx_BEGIN(disk_handle, total_processed);
 
         // TODO: if this is the last read, need to pad with zeros
-        //const written = try win.WriteFile(driveHandle, buf[0..size], null, .blocking);
+        //const written = try win.WriteFile(disk_handle, buf[0..size], null, .blocking);
         //std.debug.assert(written == size);
         {
             var written : u32 = undefined;
-            if (0 == kernel32.WriteFile(driveHandle, buf.ptr, @intCast(u32, size), &written, null)) {
+            if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, size), &written, null)) {
                 std.debug.warn("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
-                    size, totalProcessed, kernel32.GetLastError()});
+                    size, total_processed, kernel32.GetLastError()});
                 return error.AlreadyReported;
             }
             std.debug.assert(written == size);
         }
 
-        totalProcessed += size;
-        //std.debug.warn("[DEBUG] write {} bytes (total={})\n", .{size, totalProcessed});
+        total_processed += size;
+        //std.debug.warn("[DEBUG] write {} bytes (total={})\n", .{size, total_processed});
         const now = GetTickCount();
         // TODO: allow rollover
-        if ((now - lastReportTicks) > reportFrequency) {
-            const progress = @intToFloat(f32, totalProcessed) / @intToFloat(f32, fileSize) * 100;
-            std.debug.warn("{d:.0}% ({} bytes)\n", .{progress, totalProcessed});
-            lastReportTicks = now;
+        if ((now - last_report_ticks) > report_frequency) {
+            const progress = @intToFloat(f32, total_processed) / @intToFloat(f32, file_size) * 100;
+            std.debug.warn("{d:.0}% ({} bytes)\n", .{progress, total_processed});
+            last_report_ticks = now;
         }
     }
 }
