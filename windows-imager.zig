@@ -311,7 +311,15 @@ pub fn main2() anyerror!u8 {
         if (!try promptYesNo(allocator, "Are you sure you would like to re-image this drive? ")) {
             return 1;
         }
-        try imageDisk(allocator, driveHandle, diskSize, diskGeo.bytesPerSector, fileHandle, fileSize);
+        // TODO: what is a good transfer size? Do some perf testing
+        //const transfer_size = diskGeo.bytesPerSector;
+        const transfer_size = 1024 * 1024;
+        {
+            // TODO: should this allocation be aligned?  Do some perf testing to see if it helps
+            const buf = try allocator.alloc(u8, transfer_size);
+            defer allocator.free(buf);
+            try imageDisk(driveHandle, fileHandle, fileSize, buf);
+        }
         std.debug.warn("Successfully imaged drive\n", .{});
         return 0;
     }
@@ -320,10 +328,7 @@ pub fn main2() anyerror!u8 {
     return 1;
 }
 
-fn imageDisk(allocator: *mem.Allocator,
-    driveHandle: win.HANDLE, diskSize: u64, sectorSize: u32,
-    fileHandle: win.HANDLE, fileSize: u64
-) !void {
+fn imageDisk(driveHandle: win.HANDLE, fileHandle: win.HANDLE, fileSize: u64, buf: []u8) !void {
     std.debug.warn("dismounting disk...\n", .{});
     try dismountDisk(driveHandle);
     std.debug.warn("locking disk...\n", .{});
@@ -332,11 +337,6 @@ fn imageDisk(allocator: *mem.Allocator,
 
     // do I need to do this?
     //try win.SetFilePointerEx_BEGIN(driveHandle, 0);
-
-    // TODO: should this be aligned?
-    const buf = try allocator.alloc(u8, sectorSize);
-    //const buf = try allocator.alloc(u8, std.math.max(sectorSize, 1024 * 64)); // 64K buffer?
-    defer allocator.free(buf);
 
     var totalProcessed : u64 = 0;
     var lastReportTicks = GetTickCount();
