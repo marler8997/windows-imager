@@ -131,27 +131,38 @@ fn formatU16(s: anytype) FormatU16 {
     @compileError("formatU16 doesn't support type " ++ @typeName(@TypeOf(s)));
 }
 
-fn printDiskSeparator(name: []const u16) void {
-    std.debug.warn("--------------------------------------------------------------------------------\n", .{});
-    std.debug.warn("Drive \"{}\"\n", .{formatU16(name)});
-}
-fn dumpDiskGeo(geo: DISK_GEOMETRY) !void {
+//fn dumpDiskGeo(geo: DISK_GEOMETRY) !void {
+//    const disk_size = sumDiskSize(geo);
+//    var typed_disk_size : f32 = @intToFloat(f32, disk_size);
+//    var size_unit : []const u8 = undefined;
+//    getNiceSize(&typed_disk_size, &size_unit);
+//    std.debug.warn(
+//        \\{}
+//        \\{} cylinders *
+//        \\{} tracks/cylinder *
+//        \\{} sectors/track *
+//        \\{} bytes/sector
+//        \\= {} bytes
+//        \\= {d:.1} {}
+//        \\
+//    , .{geo.MediaType, geo.Cylinders, geo.TracksPerCylinder,
+//        geo.SectorsPerTrack, geo.BytesPerSector, disk_size,
+//        typed_disk_size, size_unit});
+//}
+
+fn printDiskSummary(optional_drive_index: ?u8, drive: []const u16, geo: DISK_GEOMETRY) void {
     const disk_size = sumDiskSize(geo);
     var typed_disk_size : f32 = @intToFloat(f32, disk_size);
-    var suffix : []const u8 = undefined;
-    getNiceSize(&typed_disk_size, &suffix);
-    std.debug.warn(
-        \\{}
-        \\{} cylinders *
-        \\{} tracks/cylinder *
-        \\{} sectors/track *
-        \\{} bytes/sector
-        \\= {} bytes
-        \\= {d:.1} {}
-        \\
-    , .{geo.MediaType, geo.Cylinders, geo.TracksPerCylinder,
-        geo.SectorsPerTrack, geo.BytesPerSector, disk_size,
-        typed_disk_size, suffix});
+    var size_unit : []const u8 = undefined;
+    getNiceSize(&typed_disk_size, &size_unit);
+    if (optional_drive_index) |drive_index| {
+        std.debug.warn("{}: ", .{drive_index});
+    }
+    std.debug.warn("\"{}\" {d:.1} {} {}\n", .{
+        formatU16(drive),
+        typed_disk_size, size_unit,
+        geo.MediaType,
+    });
 }
 
 fn getNiceSize(size: *f32, suffix: *[]const u8) void {
@@ -289,8 +300,7 @@ pub fn main2() anyerror!u8 {
                 else => return e,
             };
             const disk_geo = try getDiskGeo(disk_handle);
-            printDiskSeparator(&disk_name.str);
-            try dumpDiskGeo(disk_geo);
+            printDiskSummary(i, &disk_name.str, disk_geo);
         }}
         return 0;
     }
@@ -313,8 +323,7 @@ pub fn main2() anyerror!u8 {
             return error.AlreadyReported;
         };
         const disk_geo = try getDiskGeo(disk_handle);
-        printDiskSeparator(drive);
-        try dumpDiskGeo(disk_geo);
+        printDiskSummary(null, drive, disk_geo);
 
         const file_handle = kernel32.CreateFileW(
             file,
