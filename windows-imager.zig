@@ -6,6 +6,18 @@ const kernel32 = win.kernel32;
 
 pub extern "kernel32" fn GetTickCount(
 ) callconv(win.WINAPI) u32;
+pub extern "kernel32" fn FindFirstVolumeW(
+    lpszVolumeName: [*]win.WCHAR,
+    cchBufferLength: u32
+) callconv(win.WINAPI) win.HANDLE;
+pub extern "kernel32" fn FindVolumeClose(
+    hFindVolume: win.HANDLE,
+) callconv(win.WINAPI) win.BOOL;
+pub extern "kernel32" fn FindNextVolumeW(
+    hFindVolume: win.HANDLE,
+    lpszVolumeName: [*]win.WCHAR,
+    cchBufferLength: u32
+) callconv(win.WINAPI) win.BOOL;
 
 // My best guess is that windows expects all enums inside structs to be 32 bits?
 const MEDIA_TYPE = extern enum {
@@ -93,11 +105,39 @@ fn sumDiskSize(geo: DISK_GEOMETRY) u64 {
         @intCast(u64, geo.SectorsPerTrack) *
         @intCast(u64, geo.BytesPerSector);
 }
+
 fn printUtf16Le(s: []const u16) void {
     for (s) |c| {
         std.debug.warn("{c}", .{@intCast(u8, c)});
     }
 }
+const FormatU16 = struct {
+    s: []const u16,
+    pub fn format(
+        self: @This(),
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) std.os.WriteError!void {
+        for (self.s) |c| {
+            try writer.print("{c}", .{@intCast(u8, c)});
+        }
+    }
+};
+fn formatU16(s: anytype) FormatU16 {
+    switch (@typeInfo(@TypeOf(s))) {
+        .Pointer => |info| switch (info.size) {
+            .Slice => return FormatU16 { .s = s },
+            .Many => {
+                return FormatU16 { .s = std.mem.span(s) };
+            },
+            else => {},
+        },
+        else => {},
+    }
+    @compileError("formatU16 doesn't support type " ++ @typeName(@TypeOf(s)));
+}
+
 fn printDiskSeparator(name: []const u16) void {
     std.debug.warn("--------------------------------------------------------------------------------\n", .{});
     std.debug.warn("Drive \"", .{});
@@ -264,6 +304,11 @@ pub fn main2() anyerror!u8 {
         return 0;
     }
 
+    if (mem.eql(u8, cmd, "listvolumes")) {
+        try listVolumes();
+        return 0;
+    }
+
     if (mem.eql(u8, cmd, "image")) {
         try enforceArgCount(args, 2);
         const drive = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[0]);
@@ -370,6 +415,30 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
             const progress = @intToFloat(f32, total_processed) / @intToFloat(f32, file_size) * 100;
             std.debug.warn("{d:.0}% ({} bytes)\n", .{progress, total_processed});
             last_report_ticks = now;
+        }
+    }
+}
+
+fn listVolumes() !void {
+    var buf : [200]u16 = undefined;
+    const fh = FindFirstVolumeW(&buf, buf.len);
+    if (fh == win.INVALID_HANDLE_VALUE) {
+        std.debug.warn("Error: FindFirstVolumeW failed with {}\n", .{kernel32.GetLastError()});
+        return error.AlreadyReported;
+    }
+    defer {
+        if (0 == FindVolumeClose(fh))
+            std.debug.panic("FindVolumeClose failed with {}", .{kernel32.GetLastError()});
+    }
+    while (true) {
+        const s : []u16 = &buf;
+        std.debug.warn("{}\n", .{formatU16(std.meta.assumeSentinel(s.ptr, 0))});
+        if (0 == FindNextVolumeW(fh, &buf, buf.len)) {
+            const err = kernel32.GetLastError();
+            if (err == win.Win32Error.NO_MORE_FILES)
+                break;
+            std.debug.warn("Error: FindNextVolumeW failed with {}\n", .{err});
+            return error.AlreadyReported;
         }
     }
 }
