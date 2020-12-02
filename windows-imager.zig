@@ -38,6 +38,13 @@ pub extern "kernel32" fn GetLogicalDriveStringsW(
     lpBuffer: ?[*]win.WCHAR,
 ) callconv(win.WINAPI) win.DWORD;
 
+pub extern "kernel32" fn GetVolumeNameForVolumeMountPointW(
+    lpszVolumeMountPoint: [*:0]const win.WCHAR,
+    lpszVolumeName: [*]win.WCHAR,
+    cchBufferLength: win.DWORD
+) callconv(win.WINAPI) win.BOOL;
+
+
 // My best guess is that windows expects all enums inside structs to be 32 bits?
 const MEDIA_TYPE = extern enum {
   Unknown = 0,
@@ -533,7 +540,15 @@ fn listLogicalDrives() !void {
         const next_drive = mem.span(next_drive_ptr);
         if (next_drive.len == 0)
             break;
-        std.debug.warn("{}\n", .{formatU16(next_drive)});
+        var volume_name_buf : [win.MAX_PATH]u16 = undefined;
+
+        if (0 == GetVolumeNameForVolumeMountPointW(next_drive, &volume_name_buf, volume_name_buf.len)) {
+            std.debug.warn("{} (failed to get volume {})\n", .{formatU16(next_drive), kernel32.GetLastError()});
+        } else {
+            const volume_name = mem.span(std.meta.assumeSentinel(@as([]u16, &volume_name_buf).ptr, 0));
+            std.debug.warn("{} {}\n", .{formatU16(next_drive), formatU16(volume_name)});
+        }
+
         next_drive_ptr += next_drive.len + 1;
     }
 }
