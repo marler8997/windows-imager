@@ -19,6 +19,25 @@ pub extern "kernel32" fn FindNextVolumeW(
     cchBufferLength: u32
 ) callconv(win.WINAPI) win.BOOL;
 
+pub extern "kernel32" fn FindFirstVolumeMountPointW(
+    lpszRootPathName: [*:0]const win.WCHAR,
+    lpszVolumeMountPoint: [*]win.WCHAR,
+    cchBufferLength: u32
+) callconv(win.WINAPI) win.HANDLE;
+pub extern "kernel32" fn FindVolumeMountPointClose(
+    hFindVolumeMountPoint: win.HANDLE,
+) callconv(win.WINAPI) win.BOOL;
+pub extern "kernel32" fn FindNextVolumeMountPointW(
+    hFindVolumeMountPoint: win.HANDLE,
+    lpszVolumeMountPoint: [*]win.WCHAR,
+    cchBufferLength: u32
+) callconv(win.WINAPI) win.BOOL;
+
+pub extern "kernel32" fn GetLogicalDriveStringsW(
+    nBufferLength: win.DWORD,
+    lpBuffer: ?[*]win.WCHAR,
+) callconv(win.WINAPI) win.DWORD;
+
 // My best guess is that windows expects all enums inside structs to be 32 bits?
 const MEDIA_TYPE = extern enum {
   Unknown = 0,
@@ -123,7 +142,7 @@ fn formatU16(s: anytype) FormatU16 {
     switch (@typeInfo(@TypeOf(s))) {
         .Pointer => |info| switch (info.size) {
             .Slice => return FormatU16 { .s = s },
-            .Many => return FormatU16 { .s = std.mem.span(s) },
+            .Many => return FormatU16 { .s = mem.span(s) },
             else => {},
         },
         else => {},
@@ -265,9 +284,9 @@ fn promptYesNo(allocator: *mem.Allocator, prompt: []const u8) !bool {
             error.StreamTooLong => continue,
             else => return e
         };
-        const s = std.mem.trimRight(u8, answer.items, "\r");
-        if (std.mem.eql(u8, s, "y")) return true;
-        if (std.mem.eql(u8, s, "n")) return false;
+        const s = mem.trimRight(u8, answer.items, "\r");
+        if (mem.eql(u8, s, "y")) return true;
+        if (mem.eql(u8, s, "n")) return false;
     }
 }
 pub fn main() anyerror!u8 {
@@ -284,6 +303,8 @@ pub fn main2() anyerror!u8 {
             \\Usage: windows-imager COMMNAD ARGS...
             \\  list              list physical disks
             \\  image DRIVE FILE  image the given drive with the given file
+            \\  listvolumes       list volume paths (i.e. \\?\Volume{{6abe...}}\)
+            \\  listlogicaldrives list logical drives (i.e. C:\)
             , .{});
         return 1;
     }
@@ -307,6 +328,11 @@ pub fn main2() anyerror!u8 {
 
     if (mem.eql(u8, cmd, "listvolumes")) {
         try listVolumes();
+        return 0;
+    }
+
+    if (mem.eql(u8, cmd, "listlogicaldrives")) {
+        try listLogicalDrives();
         return 0;
     }
 
@@ -421,7 +447,10 @@ fn listVolumes() !void {
     var buf : [200]u16 = undefined;
     const fh = FindFirstVolumeW(&buf, buf.len);
     if (fh == win.INVALID_HANDLE_VALUE) {
-        std.debug.warn("Error: FindFirstVolumeW failed with {}\n", .{kernel32.GetLastError()});
+        const err = kernel32.GetLastError();
+        if (err == .NO_MORE_FILES)
+            return;
+        std.debug.warn("Error: FindFirstVolumeW failed with {}\n", .{err});
         return error.AlreadyReported;
     }
     defer {
@@ -430,13 +459,81 @@ fn listVolumes() !void {
     }
     while (true) {
         const s : []u16 = &buf;
-        std.debug.warn("{}\n", .{formatU16(std.meta.assumeSentinel(s.ptr, 0))});
+        const s_ptr = std.meta.assumeSentinel(s.ptr, 0);
+        std.debug.warn("{}\n", .{formatU16(s_ptr)});
+        try printDriveLetterName(s_ptr);
+        try listVolumeMounts(s_ptr);
         if (0 == FindNextVolumeW(fh, &buf, buf.len)) {
             const err = kernel32.GetLastError();
-            if (err == win.Win32Error.NO_MORE_FILES)
+            if (err == .NO_MORE_FILES)
                 break;
             std.debug.warn("Error: FindNextVolumeW failed with {}\n", .{err});
             return error.AlreadyReported;
         }
+    }
+}
+
+fn listVolumeMounts(volume: [*:0]const u16) !void {
+    var buf : [200]u16 = undefined;
+    const fh = FindFirstVolumeMountPointW(volume, &buf, buf.len);
+    if (fh == win.INVALID_HANDLE_VALUE) {
+        const err = kernel32.GetLastError();
+        if (err == .NO_MORE_FILES)
+            return;
+        if (err == .PATH_NOT_FOUND)
+            return;
+        if (err == .UNRECOGNIZED_VOLUME)
+            return;
+        std.debug.warn("Error: FindFirstVolumeMountPointW failed with {}\n", .{err});
+        return error.AlreadyReported;
+    }
+    defer {
+        if (0 == FindVolumeMountPointClose (fh))
+            std.debug.panic("FindVolumeMountPointClose  failed with {}", .{kernel32.GetLastError()});
+    }
+    while (true) {
+        const s : []u16 = &buf;
+        std.debug.warn("{}\n", .{formatU16(std.meta.assumeSentinel(s.ptr, 0))});
+        if (0 == FindNextVolumeMountPointW(fh, &buf, buf.len)) {
+            const err = kernel32.GetLastError();
+            if (err == .NO_MORE_FILES)
+                break;
+            std.debug.warn("Error: FindNextVolumeMountPointW failed with {}\n", .{err});
+            return error.AlreadyReported;
+        }
+    }
+}
+
+fn printDriveLetterName(volume: [*:0]const u16) !void {
+    // TODO: implement
+}
+
+fn getLogicalDriveStrings(allocator: *mem.Allocator) ![]u16 {
+    const len = GetLogicalDriveStringsW(0, null);
+    if (len == 0) {
+        std.debug.warn("Error: GetLogicalDriveStrings failed with {}\n", .{kernel32.GetLastError()});
+        return error.AlreadyReported;
+    }
+    const buf = try allocator.alloc(u16, len);
+    errdefer allocator.free(buf);
+
+    const result = GetLogicalDriveStringsW(len, buf.ptr);
+    std.debug.assert(len == result + 1);
+    std.debug.assert(buf[len-1] == 0);
+
+    return buf;
+}
+
+fn listLogicalDrives() !void {
+    const drives = try getLogicalDriveStrings(std.heap.page_allocator);
+    defer std.heap.page_allocator.free(drives);
+    var next_drive_ptr = std.meta.assumeSentinel(drives.ptr, 0);
+    while (true)
+    {
+        const next_drive = mem.span(next_drive_ptr);
+        if (next_drive.len == 0)
+            break;
+        std.debug.warn("{}\n", .{formatU16(next_drive)});
+        next_drive_ptr += next_drive.len + 1;
     }
 }
