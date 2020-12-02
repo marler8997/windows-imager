@@ -106,11 +106,6 @@ fn sumDiskSize(geo: DISK_GEOMETRY) u64 {
         @intCast(u64, geo.BytesPerSector);
 }
 
-fn printUtf16Le(s: []const u16) void {
-    for (s) |c| {
-        std.debug.warn("{c}", .{@intCast(u8, c)});
-    }
-}
 const FormatU16 = struct {
     s: []const u16,
     pub fn format(
@@ -128,9 +123,7 @@ fn formatU16(s: anytype) FormatU16 {
     switch (@typeInfo(@TypeOf(s))) {
         .Pointer => |info| switch (info.size) {
             .Slice => return FormatU16 { .s = s },
-            .Many => {
-                return FormatU16 { .s = std.mem.span(s) };
-            },
+            .Many => return FormatU16 { .s = std.mem.span(s) },
             else => {},
         },
         else => {},
@@ -140,9 +133,7 @@ fn formatU16(s: anytype) FormatU16 {
 
 fn printDiskSeparator(name: []const u16) void {
     std.debug.warn("--------------------------------------------------------------------------------\n", .{});
-    std.debug.warn("Drive \"", .{});
-    printUtf16Le(name);
-    std.debug.warn("\"\n", .{});
+    std.debug.warn("Drive \"{}\"\n", .{formatU16(name)});
 }
 fn dumpDiskGeo(geo: DISK_GEOMETRY) !void {
     const disk_size = sumDiskSize(geo);
@@ -318,9 +309,7 @@ pub fn main2() anyerror!u8 {
         const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
         const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
-            std.debug.warn("Error: Failed to open drive '", .{});
-            printUtf16Le(drive);
-            std.debug.warn("': {}\n", .{e});
+            std.debug.warn("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
             return error.AlreadyReported;
         };
         const disk_geo = try getDiskGeo(disk_handle);
