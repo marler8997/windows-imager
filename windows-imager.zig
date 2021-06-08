@@ -184,7 +184,7 @@ fn printDiskSummary(optional_drive_index: ?u8, drive: []const u16, geo: DISK_GEO
     if (optional_drive_index) |drive_index| {
         std.debug.warn("{}: ", .{drive_index});
     }
-    std.debug.warn("\"{}\" {d:.1} {} {}\n", .{
+    std.debug.warn("\"{}\" {d:.1} {s} {}\n", .{
         formatU16(drive),
         typed_disk_size, size_unit,
         geo.MediaType,
@@ -284,7 +284,7 @@ fn promptYesNo(allocator: *mem.Allocator, prompt: []const u8) !bool {
     var answer = std.ArrayList(u8).init(allocator);
     defer answer.deinit();
     while (true) {
-        std.debug.warn("{}[y/n]? ", .{prompt});
+        std.debug.warn("{s}[y/n]? ", .{prompt});
         //const answer = try std.io.readLine(&buffer);
         answer.resize(0) catch @panic("codebug");
         std.io.getStdIn().reader().readUntilDelimiterArrayList(&answer, '\n', 20) catch |e| switch (e) {
@@ -368,7 +368,8 @@ pub fn main2() anyerror!u8 {
             null
         );
         if (file_handle == win.INVALID_HANDLE_VALUE) {
-           std.debug.warn("Error: failed to open '{}', error={}\n", .{file, kernel32.GetLastError()});
+           // FIXME: {any} should be {s} when zig supports u16.
+           std.debug.warn("Error: failed to open '{any}', error={}\n", .{file, kernel32.GetLastError()});
            return error.AlreadyReported;
         }
         const disk_size = sumDiskSize(disk_geo);
@@ -377,7 +378,7 @@ pub fn main2() anyerror!u8 {
             var typedFileSize : f32 = @intToFloat(f32, file_size);
             var suffix : []const u8 = undefined;
             getNiceSize(&typedFileSize, &suffix);
-            std.debug.warn("file size is {} ({d:.2} {})\n", .{file_size, typedFileSize, suffix});
+            std.debug.warn("file size is {} ({d:.2} {s})\n", .{file_size, typedFileSize, suffix});
         }
 
         if (file_size > disk_size) {
@@ -400,7 +401,7 @@ pub fn main2() anyerror!u8 {
         return 0;
     }
 
-    std.debug.warn("Error: unknown command '{}'\n", .{cmd});
+    std.debug.warn("Error: unknown command '{s}'\n", .{cmd});
     return 1;
 }
 
