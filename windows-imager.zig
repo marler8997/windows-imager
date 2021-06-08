@@ -368,6 +368,7 @@ pub fn main2() anyerror!u8 {
             null
         );
         if (file_handle == win.INVALID_HANDLE_VALUE) {
+           // FIXME: {any} should be {s} when zig supports u16.
            std.debug.warn("Error: failed to open '{any}', error={}\n", .{file, kernel32.GetLastError()});
            return error.AlreadyReported;
         }
