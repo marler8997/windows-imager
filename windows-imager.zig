@@ -46,7 +46,7 @@ pub extern "kernel32" fn GetVolumeNameForVolumeMountPointW(
 
 
 // My best guess is that windows expects all enums inside structs to be 32 bits?
-const MEDIA_TYPE = extern enum {
+const MEDIA_TYPE = enum(i32) {
   Unknown = 0,
   F5_1Pt2_512 = 1,
   F3_1Pt44_512 = 2,
@@ -117,7 +117,7 @@ fn getDiskGeo(drive_handle: win.HANDLE) !DISK_GEOMETRY {
             &bytes_returned,
             null);
         if (result == 0) {
-            std.debug.warn("Error: DeviceIoControl IOCTL_DISK_GET_DRIVE_GEOMETRY failed with {}\n", .{
+            std.debug.print("Error: DeviceIoControl IOCTL_DISK_GET_DRIVE_GEOMETRY failed with {}\n", .{
                 kernel32.GetLastError()});
             return error.AlreadyReported;
         }
@@ -140,6 +140,8 @@ const FormatU16 = struct {
         options: std.fmt.FormatOptions,
         writer: anytype,
     ) std.os.WriteError!void {
+        _ = fmt;
+        _ = options;
         for (self.s) |c| {
             try writer.print("{c}", .{@intCast(u8, c)});
         }
@@ -162,7 +164,7 @@ fn formatU16(s: anytype) FormatU16 {
 //    var typed_disk_size : f32 = @intToFloat(f32, disk_size);
 //    var size_unit : []const u8 = undefined;
 //    getNiceSize(&typed_disk_size, &size_unit);
-//    std.debug.warn(
+//    std.debug.print(
 //        \\{}
 //        \\{} cylinders *
 //        \\{} tracks/cylinder *
@@ -182,9 +184,9 @@ fn printDiskSummary(optional_drive_index: ?u8, drive: []const u16, geo: DISK_GEO
     var size_unit : []const u8 = undefined;
     getNiceSize(&typed_disk_size, &size_unit);
     if (optional_drive_index) |drive_index| {
-        std.debug.warn("{}: ", .{drive_index});
+        std.debug.print("{}: ", .{drive_index});
     }
-    std.debug.warn("\"{}\" {d:.1} {s} {}\n", .{
+    std.debug.print("\"{}\" {d:.1} {s} {}\n", .{
         formatU16(drive),
         typed_disk_size, size_unit,
         geo.MediaType,
@@ -225,7 +227,7 @@ fn dismountDisk(disk_handle: win.HANDLE) !void {
         &unused,
         null);
     if (result == 0) {
-        std.debug.warn("Error: DeviceIoControl FSCTL_DISMOUNT_VOLUME failed with {}\n", .{
+        std.debug.print("Error: DeviceIoControl FSCTL_DISMOUNT_VOLUME failed with {}\n", .{
             kernel32.GetLastError()});
         return error.AlreadyReported;
     }
@@ -240,7 +242,7 @@ fn lockDisk(disk_handle: win.HANDLE) !void {
         &unused,
         null);
     if (result == 0) {
-        std.debug.warn("Error: DeviceIoControl FSCTL_LOCK_VOLUME failed with {}\n", .{
+        std.debug.print("Error: DeviceIoControl FSCTL_LOCK_VOLUME failed with {}\n", .{
             kernel32.GetLastError()});
         return error.AlreadyReported;
     }
@@ -275,16 +277,16 @@ fn openDisk(disk_name: [:0]const u16, access: u32) !win.HANDLE {
 
 fn enforceArgCount(args: []const[]const u8, count: usize) !void {
     if (args.len != count) {
-        std.debug.warn("this command should have {} argument(s) but got {}\n", .{count, args.len});
+        std.debug.print("this command should have {} argument(s) but got {}\n", .{count, args.len});
         return error.AlreadyReported;
     }
 }
 
-fn promptYesNo(allocator: *mem.Allocator, prompt: []const u8) !bool {
+fn promptYesNo(allocator: mem.Allocator, prompt: []const u8) !bool {
     var answer = std.ArrayList(u8).init(allocator);
     defer answer.deinit();
     while (true) {
-        std.debug.warn("{s}[y/n]? ", .{prompt});
+        std.debug.print("{s}[y/n]? ", .{prompt});
         //const answer = try std.io.readLine(&buffer);
         answer.resize(0) catch @panic("codebug");
         std.io.getStdIn().reader().readUntilDelimiterArrayList(&answer, '\n', 20) catch |e| switch (e) {
@@ -303,11 +305,11 @@ pub fn main() anyerror!u8 {
     };
 }
 pub fn main2() anyerror!u8 {
-    const allocator = &std.heap.ArenaAllocator.init(std.heap.page_allocator).allocator;
+    const allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator).allocator();
     var args = (try std.process.argsAlloc(allocator))[1..];
     if (args.len == 0) {
-        std.debug.warn(
-            \\Usage: windows-imager COMMNAD ARGS...
+        std.debug.print(
+            \\Usage: windows-imager COMMAND ARGS...
             \\  list              list physical disks
             \\  image DRIVE FILE  image the given drive with the given file
             \\  listvolumes       list volume paths (i.e. \\?\Volume{{6abe...}}\)
@@ -352,7 +354,7 @@ pub fn main2() anyerror!u8 {
         const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
         const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
-            std.debug.warn("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
+            std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
             return error.AlreadyReported;
         };
         const disk_geo = try getDiskGeo(disk_handle);
@@ -369,7 +371,7 @@ pub fn main2() anyerror!u8 {
         );
         if (file_handle == win.INVALID_HANDLE_VALUE) {
            // FIXME: {any} should be {s} when zig supports u16.
-           std.debug.warn("Error: failed to open '{any}', error={}\n", .{file, kernel32.GetLastError()});
+           std.debug.print("Error: failed to open '{any}', error={}\n", .{file, kernel32.GetLastError()});
            return error.AlreadyReported;
         }
         const disk_size = sumDiskSize(disk_geo);
@@ -378,11 +380,11 @@ pub fn main2() anyerror!u8 {
             var typedFileSize : f32 = @intToFloat(f32, file_size);
             var suffix : []const u8 = undefined;
             getNiceSize(&typedFileSize, &suffix);
-            std.debug.warn("file size is {} ({d:.2} {s})\n", .{file_size, typedFileSize, suffix});
+            std.debug.print("file size is {} ({d:.2} {s})\n", .{file_size, typedFileSize, suffix});
         }
 
         if (file_size > disk_size) {
-            std.debug.warn("Error: file is too big\n", .{});
+            std.debug.print("Error: file is too big\n", .{});
             return error.AlreadyReported;
         }
         if (!try promptYesNo(allocator, "Are you sure you would like to re-image this drive? ")) {
@@ -397,20 +399,20 @@ pub fn main2() anyerror!u8 {
             defer allocator.free(buf);
             try imageDisk(disk_handle, file_handle, file_size, buf);
         }
-        std.debug.warn("Successfully imaged drive\n", .{});
+        std.debug.print("Successfully imaged drive\n", .{});
         return 0;
     }
 
-    std.debug.warn("Error: unknown command '{s}'\n", .{cmd});
+    std.debug.print("Error: unknown command '{s}'\n", .{cmd});
     return 1;
 }
 
 fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8) !void {
-    std.debug.warn("dismounting disk...\n", .{});
+    std.debug.print("dismounting disk...\n", .{});
     try dismountDisk(disk_handle);
-    std.debug.warn("locking disk...\n", .{});
+    std.debug.print("locking disk...\n", .{});
     try lockDisk(disk_handle);
-    std.debug.warn("disk ready to write\n", .{});
+    std.debug.print("disk ready to write\n", .{});
 
     // do I need to do this?
     //try win.SetFilePointerEx_BEGIN(disk_handle, 0);
@@ -422,7 +424,7 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
     while (total_processed < file_size) {
         const size = try win.ReadFile(file_handle, buf, null, .blocking);
         std.debug.assert(size > 0);
-        //std.debug.warn("[DEBUG] read {} bytes\n", .{size});
+        //std.debug.print("[DEBUG] read {} bytes\n", .{size});
 
         //try win.SetFilePointerEx_BEGIN(disk_handle, total_processed);
 
@@ -432,7 +434,7 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
         {
             var written : u32 = undefined;
             if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, size), &written, null)) {
-                std.debug.warn("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
+                std.debug.print("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
                     size, total_processed, kernel32.GetLastError()});
                 return error.AlreadyReported;
             }
@@ -440,12 +442,12 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
         }
 
         total_processed += size;
-        //std.debug.warn("[DEBUG] write {} bytes (total={})\n", .{size, total_processed});
+        //std.debug.print("[DEBUG] write {} bytes (total={})\n", .{size, total_processed});
         const now = GetTickCount();
         // TODO: allow rollover
         if ((now - last_report_ticks) > report_frequency) {
             const progress = @intToFloat(f32, total_processed) / @intToFloat(f32, file_size) * 100;
-            std.debug.warn("{d:.0}% ({} bytes)\n", .{progress, total_processed});
+            std.debug.print("{d:.0}% ({} bytes)\n", .{progress, total_processed});
             last_report_ticks = now;
         }
     }
@@ -458,7 +460,7 @@ fn listVolumes() !void {
         const err = kernel32.GetLastError();
         if (err == .NO_MORE_FILES)
             return;
-        std.debug.warn("Error: FindFirstVolumeW failed with {}\n", .{err});
+        std.debug.print("Error: FindFirstVolumeW failed with {}\n", .{err});
         return error.AlreadyReported;
     }
     defer {
@@ -468,14 +470,14 @@ fn listVolumes() !void {
     while (true) {
         const s : []u16 = &buf;
         const s_ptr = std.meta.assumeSentinel(s.ptr, 0);
-        std.debug.warn("{}\n", .{formatU16(s_ptr)});
+        std.debug.print("{}\n", .{formatU16(s_ptr)});
         try printDriveLetterName(s_ptr);
         try listVolumeMounts(s_ptr);
         if (0 == FindNextVolumeW(fh, &buf, buf.len)) {
             const err = kernel32.GetLastError();
             if (err == .NO_MORE_FILES)
                 break;
-            std.debug.warn("Error: FindNextVolumeW failed with {}\n", .{err});
+            std.debug.print("Error: FindNextVolumeW failed with {}\n", .{err});
             return error.AlreadyReported;
         }
     }
@@ -492,7 +494,7 @@ fn listVolumeMounts(volume: [*:0]const u16) !void {
             return;
         if (err == .UNRECOGNIZED_VOLUME)
             return;
-        std.debug.warn("Error: FindFirstVolumeMountPointW failed with {}\n", .{err});
+        std.debug.print("Error: FindFirstVolumeMountPointW failed with {}\n", .{err});
         return error.AlreadyReported;
     }
     defer {
@@ -501,25 +503,26 @@ fn listVolumeMounts(volume: [*:0]const u16) !void {
     }
     while (true) {
         const s : []u16 = &buf;
-        std.debug.warn("{}\n", .{formatU16(std.meta.assumeSentinel(s.ptr, 0))});
+        std.debug.print("{}\n", .{formatU16(std.meta.assumeSentinel(s.ptr, 0))});
         if (0 == FindNextVolumeMountPointW(fh, &buf, buf.len)) {
             const err = kernel32.GetLastError();
             if (err == .NO_MORE_FILES)
                 break;
-            std.debug.warn("Error: FindNextVolumeMountPointW failed with {}\n", .{err});
+            std.debug.print("Error: FindNextVolumeMountPointW failed with {}\n", .{err});
             return error.AlreadyReported;
         }
     }
 }
 
 fn printDriveLetterName(volume: [*:0]const u16) !void {
+    _ = volume;
     // TODO: implement
 }
 
-fn getLogicalDriveStrings(allocator: *mem.Allocator) ![]u16 {
+fn getLogicalDriveStrings(allocator: *const mem.Allocator) ![]u16 {
     const len = GetLogicalDriveStringsW(0, null);
     if (len == 0) {
-        std.debug.warn("Error: GetLogicalDriveStrings failed with {}\n", .{kernel32.GetLastError()});
+        std.debug.print("Error: GetLogicalDriveStrings failed with {}\n", .{kernel32.GetLastError()});
         return error.AlreadyReported;
     }
     const buf = try allocator.alloc(u16, len);
@@ -533,7 +536,7 @@ fn getLogicalDriveStrings(allocator: *mem.Allocator) ![]u16 {
 }
 
 fn listLogicalDrives() !void {
-    const drives = try getLogicalDriveStrings(std.heap.page_allocator);
+    const drives = try getLogicalDriveStrings(&std.heap.page_allocator);
     defer std.heap.page_allocator.free(drives);
     var next_drive_ptr = std.meta.assumeSentinel(drives.ptr, 0);
     while (true)
@@ -544,10 +547,10 @@ fn listLogicalDrives() !void {
         var volume_name_buf : [win.MAX_PATH]u16 = undefined;
 
         if (0 == GetVolumeNameForVolumeMountPointW(next_drive, &volume_name_buf, volume_name_buf.len)) {
-            std.debug.warn("{} (failed to get volume {})\n", .{formatU16(next_drive), kernel32.GetLastError()});
+            std.debug.print("{} (failed to get volume {})\n", .{formatU16(next_drive), kernel32.GetLastError()});
         } else {
             const volume_name = mem.span(std.meta.assumeSentinel(@as([]u16, &volume_name_buf).ptr, 0));
-            std.debug.warn("{} {}\n", .{formatU16(next_drive), formatU16(volume_name)});
+            std.debug.print("{} {}\n", .{formatU16(next_drive), formatU16(volume_name)});
         }
 
         next_drive_ptr += next_drive.len + 1;
