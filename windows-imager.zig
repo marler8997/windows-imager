@@ -46,7 +46,7 @@ pub extern "kernel32" fn GetVolumeNameForVolumeMountPointW(
 
 
 // My best guess is that windows expects all enums inside structs to be 32 bits?
-const MEDIA_TYPE = enum(c_int) {
+const MEDIA_TYPE = enum(i32) {
   Unknown = 0,
   F5_1Pt2_512 = 1,
   F3_1Pt44_512 = 2,
@@ -282,8 +282,8 @@ fn enforceArgCount(args: []const[]const u8, count: usize) !void {
     }
 }
 
-fn promptYesNo(allocator: *const mem.Allocator, prompt: []const u8) !bool {
-    var answer = std.ArrayList(u8).init(allocator.*);
+fn promptYesNo(allocator: mem.Allocator, prompt: []const u8) !bool {
+    var answer = std.ArrayList(u8).init(allocator);
     defer answer.deinit();
     while (true) {
         std.debug.print("{s}[y/n]? ", .{prompt});
@@ -387,7 +387,7 @@ pub fn main2() anyerror!u8 {
             std.debug.print("Error: file is too big\n", .{});
             return error.AlreadyReported;
         }
-        if (!try promptYesNo(&allocator, "Are you sure you would like to re-image this drive? ")) {
+        if (!try promptYesNo(allocator, "Are you sure you would like to re-image this drive? ")) {
             return 1;
         }
         // TODO: what is a good transfer size? Do some perf testing
