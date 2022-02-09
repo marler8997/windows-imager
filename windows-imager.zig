@@ -346,6 +346,59 @@ pub fn main2() anyerror!u8 {
         return 0;
     }
 
+    if (mem.eql(u8, cmd, "read")) {
+        try enforceArgCount(args, 2);
+        const drive = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[0]);
+        // TODO: Get free disk space before trying to write out file from disk.
+        const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
+
+        const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
+            std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
+            return error.AlreadyReported;
+        };
+        const disk_geo = try getDiskGeo(disk_handle);
+        printDiskSummary(null, drive, disk_geo);
+
+        const disk_size = sumDiskSize(disk_geo);
+        {
+            var typedDiskSize : f32 = @intToFloat(f32, disk_size);
+            var suffix : []const u8 = undefined;
+            getNiceSize(&typedDiskSize, &suffix);
+            std.debug.print("disk size is {} ({d:.2} {s})\n", .{disk_size, typedDiskSize, suffix});
+        }
+
+        if (!try promptYesNo(allocator, "Are you sure you would like to read this drive? ")) {
+            return 1;
+        }
+
+        // Do the prompt before overwriting the output file.
+        const file_handle = kernel32.CreateFileW(
+            file,
+            win.GENERIC_WRITE,
+            win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
+            null,
+            win.CREATE_ALWAYS,
+            win.FILE_ATTRIBUTE_NORMAL,
+            null
+        );
+        if (file_handle == win.INVALID_HANDLE_VALUE) {
+           std.debug.print("Error: failed to open '{s}', error={}\n", .{std.unicode.fmtUtf16le(file), kernel32.GetLastError()});
+           return error.AlreadyReported;
+        }
+
+        // TODO: what is a good transfer size? Do some perf testing
+        //const transfer_size = disk_geo.BytesPerSector;
+        const transfer_size = 1024 * 1024;
+        {
+            // TODO: should this allocation be aligned?  Do some perf testing to see if it helps
+            const buf = try allocator.alloc(u8, transfer_size);
+            defer allocator.free(buf);
+            try readDisk(disk_handle, file_handle, disk_size, buf);
+        }
+        std.debug.print("Successfully read drive\n", .{});
+        return 0;
+    }
+
     if (mem.eql(u8, cmd, "image")) {
         try enforceArgCount(args, 2);
         const drive = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[0]);
@@ -401,59 +454,6 @@ pub fn main2() anyerror!u8 {
             try imageDisk(disk_handle, file_handle, file_size, buf);
         }
         std.debug.print("Successfully imaged drive\n", .{});
-        return 0;
-    }
-
-    if (mem.eql(u8, cmd, "read")) {
-        try enforceArgCount(args, 2);
-        const drive = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[0]);
-        // TODO: Get free disk space before trying to write out file from disk.
-        const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
-
-        const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
-            std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
-            return error.AlreadyReported;
-        };
-        const disk_geo = try getDiskGeo(disk_handle);
-        printDiskSummary(null, drive, disk_geo);
-
-        const disk_size = sumDiskSize(disk_geo);
-        {
-            var typedDiskSize : f32 = @intToFloat(f32, disk_size);
-            var suffix : []const u8 = undefined;
-            getNiceSize(&typedDiskSize, &suffix);
-            std.debug.print("disk size is {} ({d:.2} {s})\n", .{disk_size, typedDiskSize, suffix});
-        }
-
-        if (!try promptYesNo(allocator, "Are you sure you would like to read this drive? ")) {
-            return 1;
-        }
-
-        // Do the prompt before overwriting the output file.
-        const file_handle = kernel32.CreateFileW(
-            file,
-            win.GENERIC_WRITE,
-            win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
-            null,
-            win.CREATE_ALWAYS,
-            win.FILE_ATTRIBUTE_NORMAL,
-            null
-        );
-        if (file_handle == win.INVALID_HANDLE_VALUE) {
-           std.debug.print("Error: failed to open '{s}', error={}\n", .{std.unicode.fmtUtf16Le(file), kernel32.GetLastError()});
-           return error.AlreadyReported;
-        }
-
-        // TODO: what is a good transfer size? Do some perf testing
-        //const transfer_size = disk_geo.BytesPerSector;
-        const transfer_size = 1024 * 1024;
-        {
-            // TODO: should this allocation be aligned?  Do some perf testing to see if it helps
-            const buf = try allocator.alloc(u8, transfer_size);
-            defer allocator.free(buf);
-            try readDisk(disk_handle, file_handle, disk_size, buf);
-        }
-        std.debug.print("Successfully read drive\n", .{});
         return 0;
     }
 
