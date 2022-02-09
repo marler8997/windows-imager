@@ -407,9 +407,7 @@ pub fn main2() anyerror!u8 {
     if (mem.eql(u8, cmd, "read")) {
         try enforceArgCount(args, 2);
         const drive = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[0]);
-        //const fileSlice = args[1];
-        //const file = try allocator.allocSentinel(u8, fileSlice.len, 0);
-        //mem.copy(u8, file, fileSlice);
+        // TODO: Get free disk space before trying to write out file from disk.
         const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
         const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
@@ -420,18 +418,12 @@ pub fn main2() anyerror!u8 {
         printDiskSummary(null, drive, disk_geo);
 
         const disk_size = sumDiskSize(disk_geo);
-        // const file_size = try win.GetFileSizeEx(file_handle);
         {
             var typedDiskSize : f32 = @intToFloat(f32, disk_size);
             var suffix : []const u8 = undefined;
             getNiceSize(&typedDiskSize, &suffix);
             std.debug.print("disk size is {} ({d:.2} {s})\n", .{disk_size, typedDiskSize, suffix});
         }
-
-        // if (file_size > disk_size) {
-        //     std.debug.print("Error: file is too big\n", .{});
-        //     return error.AlreadyReported;
-        // }
 
         if (!try promptYesNo(allocator, "Are you sure you would like to read this drive? ")) {
             return 1;
@@ -448,8 +440,7 @@ pub fn main2() anyerror!u8 {
             null
         );
         if (file_handle == win.INVALID_HANDLE_VALUE) {
-           // FIXME: {any} should be {s} when zig supports u16.
-           std.debug.print("Error: failed to open '{any}', error={}\n", .{file, kernel32.GetLastError()});
+           std.debug.print("Error: failed to open '{s}', error={}\n", .{std.unicode.fmtUtf16Le(file), kernel32.GetLastError()});
            return error.AlreadyReported;
         }
 
@@ -517,8 +508,6 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
 }
 
 fn readDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8) !void {
-    std.debug.print("dismounting disk...\n", .{});
-    try dismountDisk(disk_handle);
     std.debug.print("locking disk...\n", .{});
     try lockDisk(disk_handle);
     std.debug.print("disk ready to read\n", .{});
