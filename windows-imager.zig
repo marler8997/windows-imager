@@ -349,10 +349,9 @@ pub fn main2() anyerror!u8 {
     if (mem.eql(u8, cmd, "read")) {
         try enforceArgCount(args, 2);
         const drive = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[0]);
-        // TODO: Get free disk space before trying to write out file from disk.
         const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
-        const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
+        const disk_handle = openDisk(drive, win.GENERIC_READ) catch |e| {
             std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
             return error.AlreadyReported;
         };
@@ -382,11 +381,12 @@ pub fn main2() anyerror!u8 {
             null
         );
         if (file_handle == win.INVALID_HANDLE_VALUE) {
-           std.debug.print("Error: failed to open '{s}', error={}\n", .{std.unicode.fmtUtf16le(file), kernel32.GetLastError()});
+           std.debug.print("Error: failed to open '{s}', error={s}\n", .{std.unicode.fmtUtf16le(file), @tagName(kernel32.GetLastError())});
            return error.AlreadyReported;
         }
 
         // TODO: what is a good transfer size? Do some perf testing
+        // TODO: also, make this a command-lin option
         //const transfer_size = disk_geo.BytesPerSector;
         const transfer_size = 1024 * 1024;
         {
@@ -508,13 +508,6 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
 }
 
 fn readDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8) !void {
-    std.debug.print("locking disk...\n", .{});
-    try lockDisk(disk_handle);
-    std.debug.print("disk ready to read\n", .{});
-
-    // do I need to do this?
-    //try win.SetFilePointerEx_BEGIN(disk_handle, 0);
-
     var total_processed : u64 = 0;
     var last_report_ticks = GetTickCount();
     const report_frequency = 1000; // report every 1000 ms
@@ -524,16 +517,13 @@ fn readDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, bu
         std.debug.assert(size > 0);
         //std.debug.print("[DEBUG] read {} bytes\n", .{size});
 
-        //try win.SetFilePointerEx_BEGIN(disk_handle, total_processed);
-
-        // TODO: if this is the last read, need to pad with zeros
         //const written = try win.WriteFile(disk_handle, buf[0..size], null, .blocking);
         //std.debug.assert(written == size);
         {
             var written : u32 = undefined;
             if (0 == kernel32.WriteFile(file_handle, buf.ptr, @intCast(u32, size), &written, null)) {
-                std.debug.print("Error: WriteFile to file (size={}, total_written={}) failed, error={}\n",.{
-                    size, total_processed, kernel32.GetLastError()});
+                std.debug.print("Error: WriteFile (size={}, total_written={}) failed, error={s}\n",.{
+                    size, total_processed, @tagName(kernel32.GetLastError())});
                 return error.AlreadyReported;
             }
             std.debug.assert(written == size);
