@@ -383,11 +383,10 @@ pub fn main2() anyerror!u8 {
             ) else std.io.getStdOut().handle;
 
         if (file_handle == win.INVALID_HANDLE_VALUE) {
-            if (file) |filename| {
-                std.debug.print("Error: failed to open '{s}', error={s}\n", .{std.unicode.fmtUtf16le(filename), @tagName(kernel32.GetLastError())});
-            } else {
-                std.debug.print("Error: failed to open 'stdout', error={s}\n", .{@tagName(kernel32.GetLastError())});
-            }
+            const filename = if (file) |fnm|
+                fnm else try std.unicode.utf8ToUtf16LeWithNull(allocator, "stdout");
+
+            std.debug.print("Error: failed to open '{s}', error={s}\n", .{std.unicode.fmtUtf16le(filename), @tagName(kernel32.GetLastError())});
 
            return error.AlreadyReported;
         }
@@ -434,12 +433,10 @@ pub fn main2() anyerror!u8 {
 
         if (file_handle == win.INVALID_HANDLE_VALUE) {
            // FIXME: {any} should be {s} when zig supports u16.
-           if (file) |filename| {
-               std.debug.print("Error: failed to open '{any}', error={}\n", .{filename, kernel32.GetLastError()});
-           } else {
-               std.debug.print("Error: failed to open 'stdin', error={s}\n", .{@tagName(kernel32.GetLastError())});
-           }
+           const filename = if (file) |fnm|
+               fnm else try std.unicode.utf8ToUtf16LeWithNull(allocator, "stdin");
 
+           std.debug.print("Error: failed to open '{any}', error={}\n", .{filename, kernel32.GetLastError()});
            return error.AlreadyReported;
         }
         const disk_size = sumDiskSize(disk_geo);
@@ -495,7 +492,7 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
     const report_frequency = 1000; // report every 1000 ms
 
     while (total_processed < file_size) {
-        const size = try win.ReadFile(file_handle, buf, null, .blocking);
+        var size = try win.ReadFile(file_handle, buf, null, .blocking);
         std.debug.assert(size > 0);
         //std.debug.print("[DEBUG] read {} bytes\n", .{size});
 
@@ -505,27 +502,34 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
         //const written = try win.WriteFile(disk_handle, buf[0..size], null, .blocking);
         //std.debug.assert(written == size);
 
-        // A stream may not have a meaningful end position, so we may read more than we
-        // actually write on the last loop.
-        const stream_got_too_much = ((total_processed + size) > file_size);
-        const to_write_size = if (is_stream and stream_got_too_much) file_size - total_processed else size;
+        if(is_stream) {
+            // A stream may not have a meaningful end position, so we may read more than we
+            // actually write on the last loop.
+            if ((total_processed + size) > file_size) {
+                size = file_size - total_processed;
+            }
 
-        {
             var written : u32 = undefined;
-            if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, to_write_size), &written, null)) {
+            if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, size), &written, null)) {
                 std.debug.print("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
                     size, total_processed, kernel32.GetLastError()});
                 return error.AlreadyReported;
             }
 
-            // TODO: Check this assert on every iteration except the last loop, and skip last
-            // loop only if the input file is a stream.
-            if (!is_stream) {
-                std.debug.assert(written == size);
+            // TODO: Check this assert on every iteration except the last loop.
+            // std.debug.assert(written == size);
+        } else {
+            var written : u32 = undefined;
+            if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, size), &written, null)) {
+                std.debug.print("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
+                    size, total_processed, kernel32.GetLastError()});
+                return error.AlreadyReported;
             }
+
+            std.debug.assert(written == size);
         }
 
-        total_processed += to_write_size;
+        total_processed += size;
         //std.debug.print("[DEBUG] write {} bytes (total={})\n", .{size, total_processed});
         const now = GetTickCount();
         // TODO: allow rollover
