@@ -430,7 +430,7 @@ pub fn main2() anyerror!u8 {
                 win.OPEN_EXISTING,
                 win.FILE_ATTRIBUTE_NORMAL,
                 null
-            ) else std.io.getStdOut().handle;
+            ) else std.io.getStdIn().handle;
 
         if (file_handle == win.INVALID_HANDLE_VALUE) {
            // FIXME: {any} should be {s} when zig supports u16.
