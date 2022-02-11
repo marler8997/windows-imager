@@ -469,7 +469,7 @@ pub fn main2() anyerror!u8 {
             // TODO: should this allocation be aligned?  Do some perf testing to see if it helps
             const buf = try allocator.alloc(u8, transfer_size);
             defer allocator.free(buf);
-            try imageDisk(disk_handle, file_handle, file_size, buf);
+            try imageDisk(disk_handle, file_handle, file_size, buf, if (file) |_| false else true);
         }
         std.debug.print("Successfully imaged drive\n", .{});
         return 0;
@@ -479,7 +479,7 @@ pub fn main2() anyerror!u8 {
     return 1;
 }
 
-fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8) !void {
+fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8, is_stream: bool) !void {
     std.debug.print("dismounting disk...\n", .{});
     try dismountDisk(disk_handle);
     std.debug.print("locking disk...\n", .{});
@@ -504,17 +504,28 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
         // TODO: if this is the last read, need to pad with zeros
         //const written = try win.WriteFile(disk_handle, buf[0..size], null, .blocking);
         //std.debug.assert(written == size);
+
+        // A stream may not have a meaningful end position, so we may read more than we
+        // actually write on the last loop.
+        const stream_got_too_much = ((total_processed + size) > file_size);
+        const to_write_size = if (is_stream and stream_got_too_much) file_size - total_processed else size;
+
         {
             var written : u32 = undefined;
-            if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, size), &written, null)) {
+            if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, to_write_size), &written, null)) {
                 std.debug.print("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
                     size, total_processed, kernel32.GetLastError()});
                 return error.AlreadyReported;
             }
-            std.debug.assert(written == size);
+
+            // TODO: Check this assert on every iteration except the last loop, and skip last
+            // loop only if the input file is a stream.
+            if (!is_stream) {
+                std.debug.assert(written == size);
+            }
         }
 
-        total_processed += size;
+        total_processed += to_write_size;
         //std.debug.print("[DEBUG] write {} bytes (total={})\n", .{size, total_processed});
         const now = GetTickCount();
         // TODO: allow rollover
