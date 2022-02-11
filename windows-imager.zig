@@ -312,7 +312,7 @@ pub fn main2() anyerror!u8 {
             \\Usage: windows-imager COMMAND ARGS...
             \\  list              list physical disks
             \\  image DRIVE FILE  image the given drive with the given file
-            \\  read DRIVE FILE   read the given drive to the given file
+            \\  read DRIVE FILE   read the given drive to the given file (use '-' as FILE for stdout)
             \\  listvolumes       list volume paths (i.e. \\?\Volume{{6abe...}}\)
             \\  listlogicaldrives list logical drives (i.e. C:\)
             , .{});
@@ -349,7 +349,7 @@ pub fn main2() anyerror!u8 {
     if (mem.eql(u8, cmd, "read")) {
         try enforceArgCount(args, 2);
         const drive = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[0]);
-        const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
+        const file = if (mem.eql(u8, args[1], "-")) null else try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
         const disk_handle = openDisk(drive, win.GENERIC_READ) catch |e| {
             std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
@@ -371,17 +371,24 @@ pub fn main2() anyerror!u8 {
         }
 
         // Do the prompt before overwriting the output file.
-        const file_handle = kernel32.CreateFileW(
-            file,
-            win.GENERIC_WRITE,
-            win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
-            null,
-            win.CREATE_ALWAYS,
-            win.FILE_ATTRIBUTE_NORMAL,
-            null
-        );
+        const file_handle = if (file) |filename|
+            kernel32.CreateFileW(
+                filename,
+                win.GENERIC_WRITE,
+                win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
+                null,
+                win.CREATE_ALWAYS,
+                win.FILE_ATTRIBUTE_NORMAL,
+                null
+            ) else std.io.getStdOut().handle;
+
         if (file_handle == win.INVALID_HANDLE_VALUE) {
-           std.debug.print("Error: failed to open '{s}', error={s}\n", .{std.unicode.fmtUtf16le(file), @tagName(kernel32.GetLastError())});
+            if (file) |filename| {
+                std.debug.print("Error: failed to open '{s}', error={s}\n", .{std.unicode.fmtUtf16le(filename), @tagName(kernel32.GetLastError())});
+            } else {
+                std.debug.print("Error: failed to open 'stdout', error={s}\n", .{@tagName(kernel32.GetLastError())});
+            }
+
            return error.AlreadyReported;
         }
 
