@@ -443,7 +443,7 @@ pub fn main2() anyerror!u8 {
            return error.AlreadyReported;
         }
         const disk_size = sumDiskSize(disk_geo);
-        const file_size = try win.GetFileSizeEx(file_handle);
+        const file_size = if (file) |_| try win.GetFileSizeEx(file_handle) else disk_size;
         {
             var typedFileSize : f32 = @intToFloat(f32, file_size);
             var suffix : []const u8 = undefined;
@@ -469,7 +469,7 @@ pub fn main2() anyerror!u8 {
             // TODO: should this allocation be aligned?  Do some perf testing to see if it helps
             const buf = try allocator.alloc(u8, transfer_size);
             defer allocator.free(buf);
-            try imageDisk(disk_handle, file_handle, file_size, buf);
+            try imageDisk(disk_handle, file_handle, file_size, buf, if (file) |_| false else true);
         }
         std.debug.print("Successfully imaged drive\n", .{});
         return 0;
@@ -479,11 +479,23 @@ pub fn main2() anyerror!u8 {
     return 1;
 }
 
-fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8) !void {
+fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8, try_lock_again: bool) !void {
     std.debug.print("dismounting disk...\n", .{});
     try dismountDisk(disk_handle);
     std.debug.print("locking disk...\n", .{});
-    try lockDisk(disk_handle);
+    lockDisk(disk_handle) catch |err| {
+        switch (err) {
+            error.AlreadyReported => {
+                if (try_lock_again) {
+                    std.debug.print("locking disk failed, will try again in 2s...\n", .{});
+                    std.time.sleep(2_000_000_000);
+                    try lockDisk(disk_handle);
+                }
+            },
+            _ => unreachable,
+        }
+    };
+
     std.debug.print("disk ready to write\n", .{});
 
     // do I need to do this?
