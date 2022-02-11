@@ -311,7 +311,7 @@ pub fn main2() anyerror!u8 {
         std.debug.print(
             \\Usage: windows-imager COMMAND ARGS...
             \\  list              list physical disks
-            \\  image DRIVE FILE  image the given drive with the given file
+            \\  image DRIVE FILE  image the given drive with the given file (use '-' as FILE for stdin)
             \\  read DRIVE FILE   read the given drive to the given file (use '-' as FILE for stdout)
             \\  listvolumes       list volume paths (i.e. \\?\Volume{{6abe...}}\)
             \\  listlogicaldrives list logical drives (i.e. C:\)
@@ -412,7 +412,7 @@ pub fn main2() anyerror!u8 {
         //const fileSlice = args[1];
         //const file = try allocator.allocSentinel(u8, fileSlice.len, 0);
         //mem.copy(u8, file, fileSlice);
-        const file = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
+        const file = if (mem.eql(u8, args[1], "-")) null else try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
         const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
             std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
@@ -421,18 +421,25 @@ pub fn main2() anyerror!u8 {
         const disk_geo = try getDiskGeo(disk_handle);
         printDiskSummary(null, drive, disk_geo);
 
-        const file_handle = kernel32.CreateFileW(
-            file,
-            win.GENERIC_READ,
-            win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
-            null,
-            win.OPEN_EXISTING,
-            win.FILE_ATTRIBUTE_NORMAL,
-            null
-        );
+        const file_handle = if (file) |filename|
+            kernel32.CreateFileW(
+                filename,
+                win.GENERIC_READ,
+                win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
+                null,
+                win.OPEN_EXISTING,
+                win.FILE_ATTRIBUTE_NORMAL,
+                null
+            ) else std.io.getStdOut().handle;
+
         if (file_handle == win.INVALID_HANDLE_VALUE) {
            // FIXME: {any} should be {s} when zig supports u16.
-           std.debug.print("Error: failed to open '{any}', error={}\n", .{file, kernel32.GetLastError()});
+           if (file) |filename| {
+               std.debug.print("Error: failed to open '{any}', error={}\n", .{filename, kernel32.GetLastError()});
+           } else {
+               std.debug.print("Error: failed to open 'stdin', error={s}\n", .{@tagName(kernel32.GetLastError())});
+           }
+
            return error.AlreadyReported;
         }
         const disk_size = sumDiskSize(disk_geo);
@@ -448,8 +455,12 @@ pub fn main2() anyerror!u8 {
             std.debug.print("Error: file is too big\n", .{});
             return error.AlreadyReported;
         }
-        if (!try promptYesNo(allocator, "Are you sure you would like to re-image this drive? ")) {
-            return 1;
+
+        // If reading from stdin, no in-band way to present a choice to user.
+        if (file) |_| {
+            if (!try promptYesNo(allocator, "Are you sure you would like to re-image this drive? ")) {
+                return 1;
+            }
         }
         // TODO: what is a good transfer size? Do some perf testing
         //const transfer_size = disk_geo.BytesPerSector;
