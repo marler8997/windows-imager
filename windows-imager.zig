@@ -469,7 +469,7 @@ pub fn main2() anyerror!u8 {
             // TODO: should this allocation be aligned?  Do some perf testing to see if it helps
             const buf = try allocator.alloc(u8, transfer_size);
             defer allocator.free(buf);
-            try imageDisk(disk_handle, file_handle, file_size, buf, if (file) |_| false else true);
+            try imageDisk(disk_handle, file_handle, file_size, buf);
         }
         std.debug.print("Successfully imaged drive\n", .{});
         return 0;
@@ -479,22 +479,11 @@ pub fn main2() anyerror!u8 {
     return 1;
 }
 
-fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8, try_lock_again: bool) !void {
+fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8) !void {
     std.debug.print("dismounting disk...\n", .{});
     try dismountDisk(disk_handle);
     std.debug.print("locking disk...\n", .{});
-    lockDisk(disk_handle) catch |err| {
-        switch (err) {
-            error.AlreadyReported => {
-                if (try_lock_again) {
-                    std.debug.print("locking disk failed, will try again in 2s...\n", .{});
-                    std.time.sleep(2_000_000_000);
-                    try lockDisk(disk_handle);
-                }
-            },
-            _ => unreachable,
-        }
-    };
+    try lockDisk(disk_handle);
 
     std.debug.print("disk ready to write\n", .{});
 
