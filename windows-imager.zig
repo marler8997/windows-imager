@@ -349,7 +349,7 @@ pub fn main2() anyerror!u8 {
     if (mem.eql(u8, cmd, "read")) {
         try enforceArgCount(args, 2);
         const drive = try std.unicode.utf8ToUtf16LeWithNull(allocator, args[0]);
-        const file = if (mem.eql(u8, args[1], "-")) null else try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
+        const optional_file = if (mem.eql(u8, args[1], "-")) null else try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
         const disk_handle = openDisk(drive, win.GENERIC_READ) catch |e| {
             std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
@@ -371,25 +371,25 @@ pub fn main2() anyerror!u8 {
         }
 
         // Do the prompt before overwriting the output file.
-        const file_handle = if (file) |filename|
-            kernel32.CreateFileW(
-                filename,
-                win.GENERIC_WRITE,
-                win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
-                null,
-                win.CREATE_ALWAYS,
-                win.FILE_ATTRIBUTE_NORMAL,
-                null
-            ) else std.io.getStdOut().handle;
-
-        if (file_handle == win.INVALID_HANDLE_VALUE) {
-            const filename = if (file) |fnm|
-                fnm else try std.unicode.utf8ToUtf16LeWithNull(allocator, "stdout");
-
-            std.debug.print("Error: failed to open '{s}', error={s}\n", .{std.unicode.fmtUtf16le(filename), @tagName(kernel32.GetLastError())});
-
-           return error.AlreadyReported;
-        }
+        const file_handle = blk: {
+            if (optional_file) |file| {
+                const handle = kernel32.CreateFileW(
+                    file,
+                    win.GENERIC_WRITE,
+                    win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
+                    null,
+                    win.CREATE_ALWAYS,
+                    win.FILE_ATTRIBUTE_NORMAL,
+                    null,
+                );
+                if (handle == win.INVALID_HANDLE_VALUE) {
+                    std.debug.print("Error: failed to open '{s}', error={s}\n", .{std.unicode.fmtUtf16le(file), @tagName(kernel32.GetLastError())});
+                    return error.AlreadyReported;
+                }
+                break :blk handle;
+            }
+            break :blk std.io.getStdOut().handle;
+        };
 
         // TODO: what is a good transfer size? Do some perf testing
         // TODO: also, make this a command-lin option
@@ -411,7 +411,7 @@ pub fn main2() anyerror!u8 {
         //const fileSlice = args[1];
         //const file = try allocator.allocSentinel(u8, fileSlice.len, 0);
         //mem.copy(u8, file, fileSlice);
-        const file = if (mem.eql(u8, args[1], "-")) null else try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
+        const optional_file = if (mem.eql(u8, args[1], "-")) null else try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
         const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
             std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
@@ -420,45 +420,49 @@ pub fn main2() anyerror!u8 {
         const disk_geo = try getDiskGeo(disk_handle);
         printDiskSummary(null, drive, disk_geo);
 
-        const file_handle = if (file) |filename|
-            kernel32.CreateFileW(
-                filename,
-                win.GENERIC_READ,
-                win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
-                null,
-                win.OPEN_EXISTING,
-                win.FILE_ATTRIBUTE_NORMAL,
-                null
-            ) else std.io.getStdIn().handle;
-
-        if (file_handle == win.INVALID_HANDLE_VALUE) {
-           // FIXME: {any} should be {s} when zig supports u16.
-           const filename = if (file) |fnm|
-               fnm else try std.unicode.utf8ToUtf16LeWithNull(allocator, "stdin");
-
-           std.debug.print("Error: failed to open '{any}', error={}\n", .{filename, kernel32.GetLastError()});
-           return error.AlreadyReported;
-        }
-        const disk_size = sumDiskSize(disk_geo);
-        const file_size = if (file) |_| try win.GetFileSizeEx(file_handle) else disk_size;
-        {
-            var typedFileSize : f32 = @intToFloat(f32, file_size);
-            var suffix : []const u8 = undefined;
-            getNiceSize(&typedFileSize, &suffix);
-            std.debug.print("file size is {} ({d:.2} {s})\n", .{file_size, typedFileSize, suffix});
-        }
-
-        if (file_size > disk_size) {
-            std.debug.print("Error: file is too big\n", .{});
-            return error.AlreadyReported;
-        }
-
-        // If reading from stdin, no in-band way to present a choice to user.
-        if (file) |_| {
-            if (!try promptYesNo(allocator, "Are you sure you would like to re-image this drive? ")) {
-                return 1;
+        const file_handle = blk: {
+            if (optional_file) |file| {
+                const handle = kernel32.CreateFileW(
+                    file,
+                    win.GENERIC_READ,
+                    win.FILE_SHARE_READ | win.FILE_SHARE_WRITE,
+                    null,
+                    win.OPEN_EXISTING,
+                    win.FILE_ATTRIBUTE_NORMAL,
+                    null,
+                );
+                if (handle == win.INVALID_HANDLE_VALUE) {
+                    std.debug.print("Error: failed to open '{s}', error={s}\n", .{std.unicode.fmtUtf16le(file), @tagName(kernel32.GetLastError())});
+                    return error.AlreadyReported;
+                }
+                break :blk handle;
             }
-        }
+            break :blk std.io.getStdIn().handle;
+        };
+
+        const disk_size = sumDiskSize(disk_geo);
+        const max_size: u64 = blk: {
+            if (optional_file) |_| {
+                const file_size = try win.GetFileSizeEx(file_handle);
+                {
+                    var typedFileSize : f32 = @intToFloat(f32, file_size);
+                    var suffix : []const u8 = undefined;
+                    getNiceSize(&typedFileSize, &suffix);
+                    std.debug.print("file size is {} ({d:.2} {s})\n", .{file_size, typedFileSize, suffix});
+                }
+                if (file_size > disk_size) {
+                    std.debug.print("Error: file is too big\n", .{});
+                    return error.AlreadyReported;
+                }
+                // we only prompt if reading from a file, otherwise we can't use stdin to prompt the user
+                if (!try promptYesNo(allocator, "Are you sure you would like to re-image this drive? ")) {
+                    return 1;
+                }
+                break :blk file_size;
+            }
+            break :blk disk_size;
+        };
+
         // TODO: what is a good transfer size? Do some perf testing
         //const transfer_size = disk_geo.BytesPerSector;
         const transfer_size = 1024 * 1024;
@@ -466,7 +470,7 @@ pub fn main2() anyerror!u8 {
             // TODO: should this allocation be aligned?  Do some perf testing to see if it helps
             const buf = try allocator.alloc(u8, transfer_size);
             defer allocator.free(buf);
-            try imageDisk(disk_handle, file_handle, file_size, buf, if (file) |_| false else true);
+            try imageDisk(disk_handle, file_handle, max_size, buf, if (optional_file) |_| false else true);
         }
         std.debug.print("Successfully imaged drive\n", .{});
         return 0;
@@ -476,12 +480,12 @@ pub fn main2() anyerror!u8 {
     return 1;
 }
 
-fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8, is_stream: bool) !void {
+// max_size the disk size for streams, and the file size for non-streams
+fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, max_size: u64, buf: []u8, is_stream: bool) !void {
     std.debug.print("dismounting disk...\n", .{});
     try dismountDisk(disk_handle);
     std.debug.print("locking disk...\n", .{});
     try lockDisk(disk_handle);
-
     std.debug.print("disk ready to write\n", .{});
 
     // do I need to do this?
@@ -491,8 +495,8 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
     var last_report_ticks = GetTickCount();
     const report_frequency = 1000; // report every 1000 ms
 
-    while (total_processed < file_size) {
-        var size = try win.ReadFile(file_handle, buf, null, .blocking);
+    while (total_processed < max_size) {
+        const size = try win.ReadFile(file_handle, buf, null, .blocking);
         std.debug.assert(size > 0);
         //std.debug.print("[DEBUG] read {} bytes\n", .{size});
 
@@ -501,31 +505,13 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
         // TODO: if this is the last read, need to pad with zeros
         //const written = try win.WriteFile(disk_handle, buf[0..size], null, .blocking);
         //std.debug.assert(written == size);
-
-        if(is_stream) {
-            // A stream may not have a meaningful end position, so we may read more than we
-            // actually write on the last loop.
-            if ((total_processed + size) > file_size) {
-                size = file_size - total_processed;
-            }
-
+        {
             var written : u32 = undefined;
             if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, size), &written, null)) {
                 std.debug.print("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
                     size, total_processed, kernel32.GetLastError()});
                 return error.AlreadyReported;
             }
-
-            // TODO: Check this assert on every iteration except the last loop.
-            // std.debug.assert(written == size);
-        } else {
-            var written : u32 = undefined;
-            if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, size), &written, null)) {
-                std.debug.print("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
-                    size, total_processed, kernel32.GetLastError()});
-                return error.AlreadyReported;
-            }
-
             std.debug.assert(written == size);
         }
 
@@ -534,8 +520,12 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, b
         const now = GetTickCount();
         // TODO: allow rollover
         if ((now - last_report_ticks) > report_frequency) {
-            const progress = @intToFloat(f32, total_processed) / @intToFloat(f32, file_size) * 100;
-            std.debug.print("{d:.0}% ({} bytes)\n", .{progress, total_processed});
+            if (is_stream) {
+                std.debug.print("{} bytes\n", .{total_processed});
+            } else {
+                const progress = @intToFloat(f32, total_processed) / @intToFloat(f32, max_size) * 100;
+                std.debug.print("{d:.0}% ({} bytes)\n", .{progress, total_processed});
+            }
             last_report_ticks = now;
         }
     }
