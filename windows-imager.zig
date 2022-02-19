@@ -85,6 +85,19 @@ const DISK_GEOMETRY = extern struct {
     BytesPerSector: u32,
 };
 
+const win32 = struct {
+    pub const BOOL = win.BOOL;
+    pub const HANDLE = win.HANDLE;
+    pub const OVERLAPPED = win.OVERLAPPED;
+    pub extern "KERNEL32" fn ReadFile(
+        hFile: ?HANDLE,
+        lpBuffer: ?*anyopaque,
+        nNumberOfBytesToRead: u32,
+        lpNumberOfBytesRead: ?*u32,
+        lpOverlapped: ?*OVERLAPPED,
+    ) callconv(@import("std").os.windows.WINAPI) BOOL;
+};
+
 const PhysicalDriveString = struct {
     const PREFIX = "\\\\.\\PHYSICALDRIVE";
     str: [PREFIX.len + 1 :0]u16,
@@ -496,24 +509,19 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, max_size: u64, bu
     const report_frequency = 1000; // report every 1000 ms
 
     while (total_processed < max_size) {
-        const size = try win.ReadFile(file_handle, buf, null, .blocking);
-        std.debug.assert(size > 0);
+        const max_read = max_size - total_processed;
+        const size = try readFile(file_handle, buf[0..std.math.min(buf.len, max_read)]);
         //std.debug.print("[DEBUG] read {} bytes\n", .{size});
+        if (is_stream) {
+            if (size == 0) break;
+        } else {
+            std.debug.assert(size > 0);
+        }
 
         //try win.SetFilePointerEx_BEGIN(disk_handle, total_processed);
 
         // TODO: if this is the last read, need to pad with zeros
-        //const written = try win.WriteFile(disk_handle, buf[0..size], null, .blocking);
-        //std.debug.assert(written == size);
-        {
-            var written : u32 = undefined;
-            if (0 == kernel32.WriteFile(disk_handle, buf.ptr, @intCast(u32, size), &written, null)) {
-                std.debug.print("Error: WriteFile to drive (size={}, total_written={}) failed, error={}\n",.{
-                    size, total_processed, kernel32.GetLastError()});
-                return error.AlreadyReported;
-            }
-            std.debug.assert(written == size);
-        }
+        try writeFileAll(disk_handle, buf.ptr, size);
 
         total_processed += size;
         //std.debug.print("[DEBUG] write {} bytes (total={})\n", .{size, total_processed});
@@ -531,37 +539,59 @@ fn imageDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, max_size: u64, bu
     }
 }
 
-fn readDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, file_size: u64, buf: []u8) !void {
+
+fn readDisk(disk_handle: win.HANDLE, file_handle: win.HANDLE, disk_size: u64, buf: []u8) !void {
     var total_processed : u64 = 0;
     var last_report_ticks = GetTickCount();
     const report_frequency = 1000; // report every 1000 ms
 
-    while (total_processed < file_size) {
-        const size = try win.ReadFile(disk_handle, buf, null, .blocking);
+    while (total_processed < disk_size) {
+        const size = try readFile(disk_handle, buf);
         std.debug.assert(size > 0);
         //std.debug.print("[DEBUG] read {} bytes\n", .{size});
 
-        //const written = try win.WriteFile(disk_handle, buf[0..size], null, .blocking);
-        //std.debug.assert(written == size);
-        {
-            var written : u32 = undefined;
-            if (0 == kernel32.WriteFile(file_handle, buf.ptr, @intCast(u32, size), &written, null)) {
-                std.debug.print("Error: WriteFile (size={}, total_written={}) failed, error={s}\n",.{
-                    size, total_processed, @tagName(kernel32.GetLastError())});
-                return error.AlreadyReported;
-            }
-            std.debug.assert(written == size);
-        }
+        try writeFileAll(file_handle, buf.ptr, size);
 
         total_processed += size;
         //std.debug.print("[DEBUG] write {} bytes (total={})\n", .{size, total_processed});
         const now = GetTickCount();
         // TODO: allow rollover
         if ((now - last_report_ticks) > report_frequency) {
-            const progress = @intToFloat(f32, total_processed) / @intToFloat(f32, file_size) * 100;
+            const progress = @intToFloat(f32, total_processed) / @intToFloat(f32, disk_size) * 100;
             std.debug.print("{d:.0}% ({} bytes)\n", .{progress, total_processed});
             last_report_ticks = now;
         }
+    }
+}
+
+
+fn readFile(handle: win.HANDLE, buffer: []u8) !u32 {
+    const buffer_len = std.math.cast(u32, buffer.len) catch std.math.maxInt(u32);
+    while (true) {
+        var bytes_read: u32 = undefined;
+        if (0 != win32.ReadFile(handle, buffer.ptr, buffer_len, &bytes_read, null))
+            return bytes_read;
+        switch (kernel32.GetLastError()) {
+            .OPERATION_ABORTED => continue,
+            .BROKEN_PIPE => return 0,
+            .HANDLE_EOF => return 0,
+            else => |err| return win.unexpectedError(err),
+        }
+    }
+}
+
+fn writeFileAll(handle: win.HANDLE, ptr: [*]const u8, len: u32) error{AlreadyReported}!void {
+    var total_written: u32 = 0;
+    while (total_written < len) {
+        const next_size = len - total_written;
+        var written : u32 = undefined;
+        if (0 == kernel32.WriteFile(handle, ptr + total_written, next_size, &written, null)) {
+            std.debug.print("Error: WriteFile (size={}, total_written={}) failed, error={s}\n",.{
+                next_size, total_written, @tagName(kernel32.GetLastError())});
+            return error.AlreadyReported;
+        }
+        std.debug.assert(written <= next_size);
+        total_written += written;
     }
 }
 
