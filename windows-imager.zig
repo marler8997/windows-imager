@@ -622,15 +622,23 @@ fn listVolumeMounts(volume: [*:0]const u16) !void {
     var buf : [200]u16 = undefined;
     const fh = FindFirstVolumeMountPointW(volume, &buf, buf.len);
     if (fh == win.INVALID_HANDLE_VALUE) {
-        const err = kernel32.GetLastError();
-        if (err == .NO_MORE_FILES)
-            return;
-        if (err == .PATH_NOT_FOUND)
-            return;
-        if (err == .UNRECOGNIZED_VOLUME)
-            return;
-        std.debug.print("Error: FindFirstVolumeMountPointW failed with {}\n", .{err});
-        return error.AlreadyReported;
+        switch (kernel32.GetLastError()) {
+            .NO_MORE_FILES => {
+                std.debug.print("    no mount points\n", .{});
+                return;
+            },
+            .ACCESS_DENIED,
+            .PATH_NOT_FOUND,
+            .UNRECOGNIZED_VOLUME,
+            => |e| {
+                std.debug.print("    error: failed to get mount points ({s})\n", .{@tagName(e)});
+                return;
+            },
+            else => |e| {
+                std.debug.print("    error: FindFirstVolumeMountPointW failed with {s}\n", .{@tagName(e)});
+                return error.AlreadyReported;
+            },
+        }
     }
     defer {
         if (0 == FindVolumeMountPointClose (fh))
@@ -654,7 +662,7 @@ fn printDriveLetterName(volume: [*:0]const u16) !void {
     // TODO: implement
 }
 
-fn getLogicalDriveStrings(allocator: *const mem.Allocator) ![]u16 {
+fn getLogicalDriveStrings(allocator: *const mem.Allocator) ![:0]u16 {
     const len = GetLogicalDriveStringsW(0, null);
     if (len == 0) {
         std.debug.print("Error: GetLogicalDriveStrings failed with {}\n", .{kernel32.GetLastError()});
@@ -667,13 +675,13 @@ fn getLogicalDriveStrings(allocator: *const mem.Allocator) ![]u16 {
     std.debug.assert(len == result + 1);
     std.debug.assert(buf[len-1] == 0);
 
-    return buf;
+    return std.meta.assumeSentinel(buf, 0);
 }
 
 fn listLogicalDrives() !void {
     const drives = try getLogicalDriveStrings(&std.heap.page_allocator);
     defer std.heap.page_allocator.free(drives);
-    var next_drive_ptr = std.meta.assumeSentinel(drives.ptr, 0);
+    var next_drive_ptr = drives.ptr;
     while (true)
     {
         const next_drive = mem.span(next_drive_ptr);
