@@ -185,10 +185,10 @@ fn printDiskSummary(writer: anytype, optional_drive_index: ?u8, drive: []const u
     if (optional_drive_index) |drive_index| {
         std.debug.print("{}: ", .{drive_index});
     }
-    try writer.print("\"{}\" {d:.1} {s} {}\n", .{
+    try writer.print("\"{}\" {d:.1} {s} {s}\n", .{
         std.unicode.fmtUtf16le(drive),
         typed_disk_size, size_unit,
-        geo.MediaType,
+        @tagName(geo.MediaType),
     });
 }
 
