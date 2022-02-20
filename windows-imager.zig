@@ -145,33 +145,6 @@ fn sumDiskSize(geo: DISK_GEOMETRY) u64 {
         @intCast(u64, geo.BytesPerSector);
 }
 
-const FormatU16 = struct {
-    s: []const u16,
-    pub fn format(
-        self: @This(),
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) std.os.WriteError!void {
-        _ = fmt;
-        _ = options;
-        for (self.s) |c| {
-            try writer.print("{c}", .{@intCast(u8, c)});
-        }
-    }
-};
-fn formatU16(s: anytype) FormatU16 {
-    switch (@typeInfo(@TypeOf(s))) {
-        .Pointer => |info| switch (info.size) {
-            .Slice => return FormatU16 { .s = s },
-            .Many => return FormatU16 { .s = mem.span(s) },
-            else => {},
-        },
-        else => {},
-    }
-    @compileError("formatU16 doesn't support type " ++ @typeName(@TypeOf(s)));
-}
-
 //fn dumpDiskGeo(geo: DISK_GEOMETRY) !void {
 //    const disk_size = sumDiskSize(geo);
 //    var typed_disk_size : f32 = @intToFloat(f32, disk_size);
@@ -191,7 +164,7 @@ fn formatU16(s: anytype) FormatU16 {
 //        typed_disk_size, size_unit});
 //}
 
-fn printDiskSummary(optional_drive_index: ?u8, drive: []const u16, geo: DISK_GEOMETRY) void {
+fn printDiskSummary(writer: anytype, optional_drive_index: ?u8, drive: []const u16, geo: DISK_GEOMETRY) !void {
     const disk_size = sumDiskSize(geo);
     var typed_disk_size : f32 = @intToFloat(f32, disk_size);
     var size_unit : []const u8 = undefined;
@@ -199,8 +172,8 @@ fn printDiskSummary(optional_drive_index: ?u8, drive: []const u16, geo: DISK_GEO
     if (optional_drive_index) |drive_index| {
         std.debug.print("{}: ", .{drive_index});
     }
-    std.debug.print("\"{}\" {d:.1} {s} {}\n", .{
-        formatU16(drive),
+    try writer.print("\"{}\" {d:.1} {s} {}\n", .{
+        std.unicode.fmtUtf16le(drive),
         typed_disk_size, size_unit,
         geo.MediaType,
     });
@@ -323,7 +296,7 @@ pub fn main2() anyerror!u8 {
     if (args.len == 0) {
         std.debug.print(
             \\Usage: windows-imager COMMAND ARGS...
-            \\  list              list physical disks
+            \\  list              list physical disks (use 'listjson' to print details in JSON format)
             \\  image DRIVE FILE  image the given drive with the given file (use '-' as FILE for stdin)
             \\  read DRIVE FILE   read the given drive to the given file (use '-' as FILE for stdout)
             \\  listvolumes       list volume paths (i.e. \\?\Volume{{6abe...}}\)
@@ -335,8 +308,13 @@ pub fn main2() anyerror!u8 {
     const cmd = args[0];
     args = args[1..];
 
-    if (mem.eql(u8, cmd, "list")) {
+    const list_json = mem.eql(u8, cmd, "listjson");
+    if (list_json or mem.eql(u8, cmd, "list")) {
         try enforceArgCount(args, 0);
+        const stdout = std.io.getStdOut().writer();
+        if (list_json) {
+            try stdout.writeAll("[\n");
+        }
         {var i: u8 = 0; while (true) : (i += 1) {
             const disk_name = PhysicalDriveString.init(i);
             const disk_handle = openDisk(&disk_name.str, 0) catch |e| switch (e) {
@@ -344,8 +322,23 @@ pub fn main2() anyerror!u8 {
                 else => return e,
             };
             const disk_geo = try getDiskGeo(disk_handle);
-            printDiskSummary(i, &disk_name.str, disk_geo);
+            if (list_json) {
+                const name_utf8 = try std.unicode.utf16leToUtf8Alloc(allocator, &disk_name.str);
+                defer allocator.free(name_utf8);
+                const prefix: []const u8 = if (i == 0) "" else ",";
+                try stdout.print("    {s}{{\n", .{prefix});
+                try stdout.writeAll("        \"name\": ");
+                try std.json.stringify(name_utf8, .{}, stdout);
+                try stdout.writeAll(",\n");
+                try stdout.print("        \"size\": {}\n", .{sumDiskSize(disk_geo)});
+                try stdout.writeAll("    }\n");
+            } else {
+                try printDiskSummary(stdout, i, &disk_name.str, disk_geo);
+            }
         }}
+        if (list_json) {
+            try stdout.writeAll("]");
+        }
         return 0;
     }
 
@@ -365,11 +358,11 @@ pub fn main2() anyerror!u8 {
         const optional_file = if (mem.eql(u8, args[1], "-")) null else try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
         const disk_handle = openDisk(drive, win.GENERIC_READ) catch |e| {
-            std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
+            std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{std.unicode.fmtUtf16le(drive), e});
             return error.AlreadyReported;
         };
         const disk_geo = try getDiskGeo(disk_handle);
-        printDiskSummary(null, drive, disk_geo);
+        try printDiskSummary(std.io.getStdErr().writer(), null, drive, disk_geo);
 
         const disk_size = sumDiskSize(disk_geo);
         {
@@ -427,11 +420,11 @@ pub fn main2() anyerror!u8 {
         const optional_file = if (mem.eql(u8, args[1], "-")) null else try std.unicode.utf8ToUtf16LeWithNull(allocator, args[1]);
 
         const disk_handle = openDisk(drive, win.GENERIC_READ | win.GENERIC_WRITE) catch |e| {
-            std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{formatU16(drive), e});
+            std.debug.print("Error: Failed to open drive \"{}\" {}\n", .{std.unicode.fmtUtf16le(drive), e});
             return error.AlreadyReported;
         };
         const disk_geo = try getDiskGeo(disk_handle);
-        printDiskSummary(null, drive, disk_geo);
+        try printDiskSummary(std.io.getStdErr().writer(), null, drive, disk_geo);
 
         const file_handle = blk: {
             if (optional_file) |file| {
@@ -612,7 +605,7 @@ fn listVolumes() !void {
     while (true) {
         const s : []u16 = &buf;
         const s_ptr = std.meta.assumeSentinel(s.ptr, 0);
-        std.debug.print("{}\n", .{formatU16(s_ptr)});
+        std.debug.print("{}\n", .{std.unicode.fmtUtf16le(std.mem.span(s_ptr))});
         try printDriveLetterName(s_ptr);
         try listVolumeMounts(s_ptr);
         if (0 == FindNextVolumeW(fh, &buf, buf.len)) {
@@ -645,7 +638,7 @@ fn listVolumeMounts(volume: [*:0]const u16) !void {
     }
     while (true) {
         const s : []u16 = &buf;
-        std.debug.print("{}\n", .{formatU16(std.meta.assumeSentinel(s.ptr, 0))});
+        std.debug.print("{}\n", .{std.unicode.fmtUtf16le(std.mem.span(std.meta.assumeSentinel(s.ptr, 0)))});
         if (0 == FindNextVolumeMountPointW(fh, &buf, buf.len)) {
             const err = kernel32.GetLastError();
             if (err == .NO_MORE_FILES)
@@ -689,10 +682,10 @@ fn listLogicalDrives() !void {
         var volume_name_buf : [win.MAX_PATH]u16 = undefined;
 
         if (0 == GetVolumeNameForVolumeMountPointW(next_drive, &volume_name_buf, volume_name_buf.len)) {
-            std.debug.print("{} (failed to get volume {})\n", .{formatU16(next_drive), kernel32.GetLastError()});
+            std.debug.print("{} (failed to get volume {})\n", .{std.unicode.fmtUtf16le(next_drive), kernel32.GetLastError()});
         } else {
             const volume_name = mem.span(std.meta.assumeSentinel(@as([]u16, &volume_name_buf).ptr, 0));
-            std.debug.print("{} {}\n", .{formatU16(next_drive), formatU16(volume_name)});
+            std.debug.print("{} {}\n", .{std.unicode.fmtUtf16le(next_drive), std.unicode.fmtUtf16le(volume_name)});
         }
 
         next_drive_ptr += next_drive.len + 1;
